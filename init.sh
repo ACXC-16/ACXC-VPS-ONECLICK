@@ -2,13 +2,13 @@
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
 #  版本: 1.0.6
-#  仓库: https://github.com/qinjing-arch/VPS-init
+#  仓库: https://github.com/ACXC-16/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
 #  一键运行（推荐，先下载再以 root 执行）：
-#      curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
+#      curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash
 #    或
-#      sudo bash <(curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh)
+#      sudo bash <(curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh)
 #
 #  测试用环境变量（普通用户不用管，CI / 本地测试才会用到）:
 #    VPS_INIT_ALLOW_NONROOT=1  配合 --dry-run 允许非 root 运行
@@ -30,7 +30,7 @@ set -o pipefail
 
 SCRIPT_NAME="vps-init"
 VERSION="1.0.6"
-REPO_SLUG="qinjing-arch/VPS-init"
+REPO_SLUG="ACXC-16/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
 MANAGED_SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-init.conf"
@@ -1911,7 +1911,7 @@ vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
 
 用法:
   sudo bash init.sh [选项]
-  curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash
 
 选项:
   -y, --yes            全部询问自动用默认值回答（无人值守）
