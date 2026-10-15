@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.2
+#  版本: 1.0.3
 #  仓库: https://github.com/qinjing-arch/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="vps-init"
-VERSION="1.0.2"
+VERSION="1.0.3"
 REPO_SLUG="qinjing-arch/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
@@ -56,13 +56,13 @@ OPT_PASSWORD=""
 GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
 
-# 界面：auto = 有 whiptail 就用图形界面，否则回退文字问答；whiptail / plain = 强制
+# 界面：auto = 先试图形界面，不行就用编号菜单；whiptail / menu / plain 可强制
 UI_MODE="${VPS_INIT_UI:-auto}"
 UI_BACKEND="plain"
 UI_LOCALE="C.UTF-8"
-# 图形界面等待超时（秒）：等不到操作就自动切回文字问答，绝不把脚本卡死
+# 图形界面等待超时（秒）：等不到操作就自动切回文字菜单，绝不把脚本卡死
 UI_TIMEOUT="${VPS_INIT_UI_TIMEOUT:-300}"
-UI_SELFTEST_TIMEOUT=25
+UI_SELFTEST_TIMEOUT="${VPS_INIT_UI_SELFTEST_TIMEOUT:-10}"
 UI_LINES=24
 UI_COLS=80
 UI_W=76
@@ -198,23 +198,28 @@ have_gnu_timeout() {
   timeout --version 2>/dev/null | grep -qi coreutils
 }
 
-# 图形界面出错/超时 → 永久退回文字问答，绝不静默丢答案或卡死
+# 图形界面出错/超时/被 Ctrl+C → 降级：有终端就用编号菜单，否则用文字问答
 ui_fallback() { # $1=原因（可选）
+  local why="${1:-出错}"
   if [ "$UI_BACKEND" = "whiptail" ]; then
-    if [ -n "${1:-}" ]; then
-      warn "图形界面不可用（$1），已自动切换为文字问答模式"
+    if [ "$TTY_OK" -eq 1 ]; then
+      warn "图形界面不可用（$why），已改用编号菜单（输入数字选择，不依赖方向键）"
+      UI_BACKEND="menu"
     else
-      warn "图形界面出错，已自动切换为文字问答模式（后面的问题都用文字）"
+      warn "图形界面不可用（$why），已改用文字问答"
+      UI_BACKEND="plain"
     fi
-    _log_raw UI "图形界面降级为 plain：${1:-出错}"
-    UI_BACKEND="plain"
+    _log_raw UI "图形界面降级：$why → $UI_BACKEND"
   fi
   return 0
 }
 
-# 调用 whiptail：结果放 REPLY，退出码原样返回（124 = 等待超时）
+# 调用 whiptail：结果放 REPLY，退出码原样返回（124=等待超时，130=用户按了 Ctrl+C）
+# 对话期间临时忽略 Ctrl+C：这样 Ctrl+C 只会结束方框，脚本会降级成文字菜单继续跑，而不是整体退出。
 _ui_run() {
-  local rc=0 out="" tmo="$UI_TIMEOUT"
+  local rc=0 out="" tmo="$UI_TIMEOUT" saved_trap=""
+  saved_trap="$(trap -p INT)"
+  trap ':' INT
   if [ "$TTY_OK" -eq 1 ]; then
     if have_gnu_timeout; then
       out="$(env LC_ALL="$UI_LOCALE" timeout "$tmo" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
@@ -225,6 +230,8 @@ _ui_run() {
     # 没有终端时不做 fd 交换（测试用 mock whiptail 走这条分支）
     out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 2>&1 1>/dev/null)" || rc=$?
   fi
+  trap - INT
+  if [ -n "$saved_trap" ]; then eval "$saved_trap"; fi
   REPLY="$out"
   return "$rc"
 }
@@ -233,6 +240,7 @@ _ui_run() {
 ui_rc_reason() {
   case "${1:-0}" in
     124) printf '等待操作超时' ;;
+    130) printf '你按了 Ctrl+C' ;;
     255) printf '你按了 ESC / 取消' ;;
     *) printf '退出码 %s' "${1:-?}" ;;
   esac
@@ -252,8 +260,8 @@ ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动
   local rc=0 saved="$UI_TIMEOUT"
   UI_TIMEOUT="$UI_SELFTEST_TIMEOUT"
   _ui_run --title "vps-init 界面自检" \
-    --yesno "接下来会用这样的方框来操作。\n\n操作方式：用 Tab 或 ← → 切换按钮，回车确认。\n（直接敲 y / n 没用，方框里不吃字母键）\n\n  <Yes>  用图形界面\n  <No>   改用文字问答（老式 [Y/n]）\n\n如果按键没反应，什么都不用做，${UI_SELFTEST_TIMEOUT} 秒后会自动切回文字问答。" \
-    17 70 || rc=$?
+    --yesno "接下来会用这样的方框来操作。\n\n操作方式：用 Tab 或 ← → 切换按钮，回车确认。\n（直接敲 y / n 没用；如果方向键在方框里变成 ^[[C 这种乱码，\n说明你的终端不支持，请直接选 <No> 或什么都不按）\n\n  <Yes>  用图形界面\n  <No>   改用编号菜单（推荐，直接输入数字）\n\n什么都不按的话，${UI_SELFTEST_TIMEOUT} 秒后会自动改用编号菜单。" \
+    18 74 || rc=$?
   UI_TIMEOUT="$saved"
   case "$rc" in
     0) return 0 ;;
@@ -262,22 +270,26 @@ ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动
   esac
 }
 
-# 决定用哪种界面：--ui=auto 时尽量用图形界面，任何异常都退回文字问答
+# 决定用哪种界面：auto = 能用图形界面就用，否则用编号菜单，兜底文字问答
 ui_detect() {
   UI_BACKEND="plain"
   [ "$UI_MODE" = "plain" ] && return 0
 
+  # 有终端才有"菜单"这一档（显式 --ui=menu 时即使没有终端也照做，便于测试）
+  if [ "$TTY_OK" -eq 1 ] || [ "$UI_MODE" = "menu" ]; then UI_BACKEND="menu"; fi
+  [ "$UI_MODE" = "menu" ] && return 0
+
   if ! have whiptail; then
     if [ "$UI_MODE" = "whiptail" ] || [ "$UI_MODE" = "auto" ]; then
       if [ "$TTY_OK" -eq 1 ] && have apt-get; then
-        if ask_yn "图形界面需要 whiptail 组件（很小），是否现在安装？" y; then
+        if ask_yn "图形界面需要 whiptail 组件（很小，几十 KB），是否现在安装？" y; then
           run env DEBIAN_FRONTEND=noninteractive apt-get -y install whiptail >/dev/null 2>&1 ||
-            warn "whiptail 安装失败，改用文字问答"
+            warn "whiptail 安装失败"
         fi
       fi
     fi
     if ! have whiptail; then
-      [ "$UI_MODE" = "whiptail" ] && warn "没有 whiptail，无法使用图形界面，改用文字问答"
+      [ "$UI_MODE" = "whiptail" ] && warn "没有 whiptail，无法使用图形界面"
       return 0
     fi
   fi
@@ -295,9 +307,21 @@ ui_detect() {
   if have locale && locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
     UI_LOCALE="C.UTF-8"
   else
-    warn "系统没有 UTF-8 locale，图形界面里的中文可能乱码，改用文字问答（可用 --ui=whiptail 强制）"
+    warn "系统没有 UTF-8 locale，图形界面里的中文可能乱码（可用 --ui=whiptail 强制）"
     return 0
   fi
+
+  # TERM 不合法时 whiptail 的按键解析会出问题，尝试兜底成 xterm
+  case "${TERM:-}" in
+    ''|dumb|unknown)
+      warn "TERM 未设置或不可用（TERM=${TERM:-空}），图形界面按键可能失效"
+      if have infocmp && infocmp xterm >/dev/null 2>&1; then
+        export TERM=xterm
+        info "已临时把 TERM 设为 xterm"
+      else
+        return 0
+      fi ;;
+  esac
 
   ui_init_size
   # 终端太小就别用图形界面了（whiptail 会显示不全甚至直接失败）
@@ -305,21 +329,22 @@ ui_detect() {
     if [ "$UI_MODE" = "whiptail" ]; then
       warn "终端尺寸只有 ${UI_COLS}x${UI_LINES}，图形界面可能显示不全（继续尝试）"
     else
-      info "终端尺寸 ${UI_COLS}x${UI_LINES} 偏小，改用文字问答模式"
+      info "终端尺寸 ${UI_COLS}x${UI_LINES} 偏小，改用编号菜单"
       return 0
     fi
   fi
 
   # 先把操作方式讲清楚，免得卡在方框里不知道怎么按键
-  info "图形界面的操作方式：方向键移动、空格勾选、Tab 或 ← → 切换按钮、回车确认。"
-  info "方框里直接敲 y / n 是没用的；如果按键完全没反应，什么都不用做，${UI_SELFTEST_TIMEOUT} 秒后会自动切回文字问答。"
-  printf '\n'
+  info "接下来会先弹一个图形界面的自检框。操作方式：Tab 或 ← → 切换按钮，回车确认（直接敲 y/n 无效）。"
+  warn "如果按键没反应（方向键变成 ^[[C 之类的乱码）：什么都别按，${UI_SELFTEST_TIMEOUT} 秒后会自动改用编号菜单；按 Ctrl+C 也可以，脚本不会退出。"
 
   if ui_selftest; then
     UI_BACKEND="whiptail"
     _log_raw UI "使用图形界面（whiptail）"
   else
-    info "已改用文字问答模式（想再试图形界面：加 --ui=whiptail；想强制文字：加 --text）"
+    if [ "$UI_BACKEND" = "menu" ]; then
+      info "将使用编号菜单：列表里直接输入数字选择（不依赖方向键）"
+    fi
   fi
   return 0
 }
@@ -1488,6 +1513,64 @@ build_plan_tui() {
   return 0
 }
 
+# 纯文字编号菜单：不依赖方向键 / Tab / terminfo，任何终端都能用（输入编号即可）
+build_plan_menu() {
+  local entry slug title def fn i=0 line="" tok="" ok=1
+  local -a t_slug=() t_title=() t_def=()
+
+  printf '\n%s\n' "${C_BLD}${C_CYN}================== 选择要执行的步骤 ==================${C_RST}"
+  for entry in "${STEPS[@]}"; do
+    IFS='|' read -r slug title def fn <<<"$entry"
+    i=$((i + 1))
+    t_slug+=("$slug"); t_title+=("$title"); t_def+=("$def")
+    if [ "$def" = y ]; then
+      printf '  %s%2d)%s %-40s %s\n' "${C_GRN}" "$i" "${C_RST}" "$title" "${C_DIM}[默认执行]${C_RST}"
+    else
+      printf '  %s%2d)%s %-40s\n' "${C_DIM}" "$i" "${C_RST}" "$title"
+    fi
+  done
+  printf '%s\n' "${C_BLD}=====================================================${C_RST}"
+  info "直接输入编号即可：多选用空格或逗号（例：1 3）；回车=[默认执行]的那些；a=全部；0=退出"
+
+  while :; do
+    if ! _prompt_line "  请输入编号" ""; then
+      warn "读取输入失败"
+      return 1
+    fi
+    line="$(trim "${REPLY}")"
+    case "$line" in
+      '')
+        for i in "${!t_slug[@]}"; do
+          if [ "${t_def[$i]}" = y ]; then plan_add "${t_slug[$i]}"; fi
+        done
+        return 0 ;;
+      0|q|Q)
+        warn "已取消选择，未做任何修改。"
+        exit 0 ;;
+      a|A|all|ALL)
+        for i in "${!t_slug[@]}"; do plan_add "${t_slug[$i]}"; done
+        return 0 ;;
+    esac
+
+    # 解析编号
+    PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
+    ok=1
+    # shellcheck disable=SC2046,SC2086
+    for tok in $(printf '%s' "$line" | tr ',，、' '   '); do
+      case "$tok" in
+        ''|*[!0-9]*) ok=0; break ;;
+      esac
+      if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#t_slug[@]}" ]; then ok=0; break; fi
+      plan_add "${t_slug[$((tok - 1))]}"
+    done
+    if [ "$ok" -eq 1 ] && [ "${#PLAN_SLUGS[@]}" -gt 0 ]; then
+      return 0
+    fi
+    PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
+    warn "编号不对，请输入 1-${#t_slug[@]} 之间的数字，例如：1 3"
+  done
+}
+
 build_plan() {
   local entry slug title def fn i=0 total=${#STEPS[@]}
 
@@ -1505,9 +1588,15 @@ build_plan() {
     return 0
   fi
 
-  # 图形界面：一屏勾选（界面出错会自动降级，继续走下面的文字流程）
+  # 图形界面：一屏勾选（界面出错会自动降级，继续走下面的流程）
   if [ "$UI_BACKEND" = "whiptail" ]; then
     if build_plan_tui; then return 0; fi
+  fi
+
+  # 编号菜单：同样是可视化列表，但只靠输入数字，不依赖按键
+  if [ "$UI_BACKEND" = "menu" ]; then
+    build_plan_menu
+    return 0
   fi
 
   title "可执行步骤（共 ${total} 项）"
@@ -1749,8 +1838,9 @@ vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
       --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
       --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
-      --ui <模式>      界面模式：auto（默认，能用就用图形界面）/ whiptail / plain
+      --ui <模式>      界面模式：auto（默认）/ whiptail（图形方框）/ menu（编号菜单）/ plain
       --text           等价于 --ui=plain，强制用文字问答（老式 [Y/n]）
+      --menu           等价于 --ui=menu，用编号菜单（不依赖方向键，推荐给不支持的终端）
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）
       --no-color       关闭彩色输出
       --log-file <路径> 指定日志文件（默认 /var/log/vps-init.log）
@@ -1792,6 +1882,7 @@ parse_args() {
       --ui) shift; UI_MODE="${1:-auto}"; [ -n "${1:-}" ] || die "--ui 需要一个参数" ;;
       --ui=*) UI_MODE="${1#*=}" ;;
       --text) UI_MODE="plain" ;;
+      --menu) UI_MODE="menu" ;;
       --log-file) shift; LOG_FILE="${1:-$LOG_FILE}"; [ -n "${1:-}" ] || die "--log-file 需要一个参数" ;;
       --log-file=*) LOG_FILE="${1#*=}" ;;
       --list) list_steps; exit 0 ;;
