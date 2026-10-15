@@ -319,9 +319,11 @@ ui_detect_impl() {
     esac
   fi
 
+  # auto / menu：一律用编号清单，绝不碰 whiptail
+  # （只有 --ui=whiptail 显式指定，或上次明确记下 whiptail，才走下面的方框分支）
   case "$UI_MODE" in
-    plain) UI_BACKEND="plain"; return 0 ;;
-    menu)  UI_BACKEND="menu";  return 0 ;;
+    auto|menu) UI_BACKEND="menu";  return 0 ;;
+    plain)     UI_BACKEND="plain"; return 0 ;;
   esac
 
   # 下面只处理 whiptail（必须是 --ui=whiptail 显式指定，或上次记下的选择）
