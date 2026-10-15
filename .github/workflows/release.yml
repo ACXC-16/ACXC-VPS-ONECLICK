@@ -2,7 +2,7 @@ name: Release
 
 # 打 tag（形如 v1.0.0）时自动发布：先跑测试，再创建 Release 并把脚本作为附件传上去。
 # 发布后稳定下载地址（永远指向最新 Release）：
-#   https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh
+#   https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh
 on:
   push:
     tags:

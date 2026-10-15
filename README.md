@@ -5,10 +5,10 @@ Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可�
 在 VPS 上以 root 执行这一条即可（内容锁定在最新 Release，不会因为你以后改代码而变）：
 
 ```bash
-curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash
 ```
 
-> 当前版本 **v1.0.6** · 发布页 <https://github.com/qinjing-arch/VPS-init/releases>
+> 当前版本 **v1.0.6** · 发布页 <https://github.com/ACXC-16/VPS-init/releases>
 > 界面按键不灵（方向键变 `^[[C` 乱码）就加 `--menu`；想用老式 `[Y/n]` 加 `--text`：在 `sudo bash` 后面补 `-s -- --menu` 即可。
 > 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.6`。
 
@@ -49,7 +49,7 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
 
 ```bash
 # 在一条命令里加 -s -- --ui=whiptail
-curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --ui=whiptail
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --ui=whiptail
 ```
 
 进了方框之后：`↑↓` 移动、`空格` 勾选、`Tab`/`←→` 切换按钮、`回车` 确认、`ESC` 取消（**直接敲 y/n 没反应**）。如果按键失灵：什么都不用按，自检框 10 秒、普通方框 300 秒后会自动改回编号清单；按 `Ctrl+C` 也只会关掉方框、脚本继续跑，不会退出。
@@ -90,17 +90,17 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
 在 VPS 上以 root 执行这一条（复制即用）：
 
 ```bash
-curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash
 ```
 
 需要额外参数（比如只更新驱动、用编号菜单）时这样加：
 
 ```bash
-curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --menu --only sysupdate
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --menu --only sysupdate
 ```
 
 > 想用**跟随 main 分支的最新提交**（而不是锁定版本）：
-> `curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash`
+> `curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash`
 
 脚本会从 `/dev/tty` 读取你的回答，所以 `curl | bash` 这种管道执行方式下交互依然正常。
 
@@ -146,7 +146,7 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
 
 ```bash
 # 先演练一遍，看看会做什么
-curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --dry-run
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --dry-run
 
 # 只更新系统 + 改 SSH 端口，端口用 52052
 sudo bash init.sh --only sysupdate,ssh-port --port 52052
@@ -309,14 +309,14 @@ shellcheck init.sh tests/smoke.sh
 **第 1 步：在 GitHub 上建空仓库**
 
 1. 打开 <https://github.com/new>；
-2. `Repository name` 填 `VPS-init`（仓库名区分大小写，地址里的 `qinjing-arch/VPS-init` 就是按这个名字配的）；
+2. `Repository name` 填 `VPS-init`（仓库名区分大小写，地址里的 `ACXC-16/VPS-init` 就是按这个名字配的）；
 3. 选 `Public`（要用一键脚本，仓库必须公开）；
 4. **不要**勾选 `Add a README file`；
 5. 点 `Create repository`。
 
 **第 2 步：推送**
 
-仓库地址已经配好了（`qinjing-arch/VPS-init`），本地 Git 仓库也已初始化并提交，所以只要：
+仓库地址已经配好了（`ACXC-16/VPS-init`），本地 Git 仓库也已初始化并提交，所以只要：
 
 ```powershell
 cd C:\Users\IdeaPad5-16\Documents\deepseek-harness\default-workspace\vps-init
@@ -332,7 +332,7 @@ git push -u origin main
 > git init -b main
 > git add .
 > git commit -m "feat: vps-init 首版"
-> git remote add origin https://github.com/qinjing-arch/VPS-init.git
+> git remote add origin https://github.com/ACXC-16/VPS-init.git
 > git push -u origin main
 > ```
 
@@ -341,13 +341,13 @@ git push -u origin main
 先确认仓库是 **Public**，然后打开这个地址，能看到脚本内容就说明 raw 链接正常：
 
 ```
-https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh
+https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh
 ```
 
 然后在 VPS 上执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash
 ```
 
 **以后更新**：改完文件后 `git add -A && git commit -m "..." && git push` 即可，`raw` 链接永远指向最新版。
@@ -366,7 +366,7 @@ GitHub 上这两样都能随时改，改完把仓库里的地址一起换掉就�
 ```bash
 cd vps-init
 # 1) 换掉文件里的地址（README.md / init.sh / LICENSE 里的用户名或仓库名）
-sed -i 's|qinjing-arch/VPS-init|新用户名/新仓库名|g' README.md init.sh
+sed -i 's|ACXC-16/VPS-init|新用户名/新仓库名|g' README.md init.sh
 
 # 2) 换掉本地仓库的远程地址
 git remote set-url origin https://github.com/新用户名/新仓库名.git
@@ -378,13 +378,13 @@ Windows 上如果没有 `sed`，用 PowerShell（无 BOM，不破坏 LF 换行�
 ```powershell
 cd C:\Users\IdeaPad5-16\Documents\deepseek-harness\default-workspace\vps-init
 Get-ChildItem -Path . -Recurse -File -Include *.md, *.sh, LICENSE | ForEach-Object {
-  $t = [System.IO.File]::ReadAllText($_.FullName) -replace 'qinjing-arch/VPS-init', '新用户名/新仓库名'
+  $t = [System.IO.File]::ReadAllText($_.FullName) -replace 'ACXC-16/VPS-init', '新用户名/新仓库名'
   [System.IO.File]::WriteAllText($_.FullName, $t, (New-Object System.Text.UTF8Encoding($false)))
 }
 git remote set-url origin https://github.com/新用户名/新仓库名.git
 ```
 
-> 只改**仓库名**（用户名不变）时，把命令里的 `新用户名/新仓库名` 换成 `qinjing-arch/新仓库名` 即可。
+> 只改**仓库名**（用户名不变）时，把命令里的 `新用户名/新仓库名` 换成 `ACXC-16/新仓库名` 即可。
 
 ---
 
@@ -401,14 +401,14 @@ git push origin v1.0.6
 
 发布完成后：
 
-- 发布页：<https://github.com/qinjing-arch/VPS-init/releases>
+- 发布页：<https://github.com/ACXC-16/VPS-init/releases>
 - **稳定下载地址**（永远指向最新 Release，不会因为改代码而变）：
-  `https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh`
+  `https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh`
 - 附件里还有 `SHA256SUMS.txt`，可以核对下载到的脚本有没有被动过：
 
 ```bash
-curl -fsSLO https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh
-curl -fsSLO https://github.com/qinjing-arch/VPS-init/releases/latest/download/SHA256SUMS.txt
+curl -fsSLO https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh
+curl -fsSLO https://github.com/ACXC-16/VPS-init/releases/latest/download/SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt
 ```
 
