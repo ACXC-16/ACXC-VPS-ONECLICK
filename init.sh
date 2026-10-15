@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="ACXC16-VPS新机一键脚本"
-VERSION="1.0.0"
+SCRIPT_VERSION="1.0.0"
 REPO_SLUG="ACXC-16/ACXC-VPS-ONECLICK"
 
 DEFAULT_SSH_PORT="52052"
@@ -153,7 +153,7 @@ prepare_log() {
 }
 
 init_log() {
-  _log_raw START "===== ${SCRIPT_NAME} v${VERSION} 启动（参数：$*）====="
+  _log_raw START "===== ${SCRIPT_NAME} v${SCRIPT_VERSION} 启动（参数：$*）====="
 }
 
 # ============================== 交互输入 ====================================
@@ -1367,7 +1367,7 @@ status_of() { # $1=步骤标识 → 输出状态文字
 
 show_status_table() {
   local entry slug title def fn line=""
-  printf '\n%s\n' "${C_BLD}${C_CYN}  ${SCRIPT_NAME}  v${VERSION}${C_RST}"
+  printf '\n%s\n' "${C_BLD}${C_CYN}  ${SCRIPT_NAME}  v${SCRIPT_VERSION}${C_RST}"
   printf '  %s\n' "${C_DIM}适用：Ubuntu / Debian    仓库：https://github.com/${REPO_SLUG}${C_RST}"
   printf '\n'
   printf '  %-34s %s\n' "项目" "状态"
@@ -1646,7 +1646,7 @@ maybe_reboot() {
 banner() {
   printf '%s' "$C_BLD$C_CYN"
   printf '%s\n' "  =============================================================="
-  printf '%s\n' "   ${SCRIPT_NAME} v${VERSION}  —— Ubuntu / Debian VPS 初始化脚本"
+  printf '%s\n' "   ${SCRIPT_NAME} v${SCRIPT_VERSION}  —— Ubuntu / Debian VPS 初始化脚本"
   printf '%s\n' "   https://github.com/${REPO_SLUG}"
   printf '%s\n' "  =============================================================="
   printf '%s\n' "$C_RST"
@@ -1678,14 +1678,17 @@ check_os() {
     fi
     die "读不到 /etc/os-release，无法识别系统（如确定要用可加 --force）"
   fi
+  # 在子 shell 里读 /etc/os-release：这样它里面的 VERSION/NAME 等变量不会覆盖脚本自己的变量
   # shellcheck source=/dev/null
-  . /etc/os-release
-  OS_ID="${ID:-unknown}"
-  OS_PRETTY="${PRETTY_NAME:-$OS_ID}"
+  OS_ID="$( (. /etc/os-release 2>/dev/null; printf '%s' "${ID:-unknown}") 2>/dev/null || printf 'unknown' )"
+  # shellcheck source=/dev/null
+  OS_PRETTY="$( (. /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-${ID:-unknown}}") 2>/dev/null || printf 'unknown' )"
+  # shellcheck source=/dev/null
+  OS_ID_LIKE="$( (. /etc/os-release 2>/dev/null; printf '%s' "${ID_LIKE:-}") 2>/dev/null || printf '' )"
   case "$OS_ID" in
     ubuntu|debian|raspbian|linuxmint|pop|kali|armbian|devuan|deepin|neon|zorin|elementary) ;;
     *)
-      case "${ID_LIKE:-}" in
+      case "${OS_ID_LIKE:-}" in
         *debian*) ;;
         *)
           if [ "$FORCE_OS" -eq 1 ]; then
@@ -1788,7 +1791,7 @@ parse_args() {
       --log-file=*) LOG_FILE="${1#*=}" ;;
       --list) list_steps; exit 0 ;;
       -h|--help) usage; exit 0 ;;
-      -V|--version) printf '%s v%s\n' "$SCRIPT_NAME" "$VERSION"; exit 0 ;;
+      -V|--version) printf '%s v%s\n' "$SCRIPT_NAME" "$SCRIPT_VERSION"; exit 0 ;;
       *) err "未知参数：$1"; printf '\n'; usage; exit 2 ;;
     esac
     shift

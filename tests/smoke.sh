@@ -261,6 +261,24 @@ check_has "dry-run 下不真重启" "$CUR_OUT" "[dry-run] 将执行 reboot"
 check_hasnt "不再等待 10 秒" "$CUR_OUT" "10 秒"
 unset VPS_INIT_REBOOT_REQUIRED
 
+echo "== 17) 真实 Ubuntu 的 /etc/os-release 不能污染脚本版本号 =="
+mkdir -p "$WORK/fakeos"
+cat >"$WORK/fakeos/os-release" <<'EOF'
+NAME="Ubuntu"
+VERSION="24.04.1 LTS (Noble Numbat)"
+ID=ubuntu
+ID_LIKE=debian
+PRETTY_NAME="Ubuntu 24.04.1 LTS"
+VERSION_ID="24.04"
+EOF
+sed "s|/etc/os-release|$WORK/fakeos/os-release|g" "$ROOT/init.sh" >"$WORK/init-os.sh"
+CUR_OUT="$WORK/osrelease.out"
+rc="$(printf '0\n' | run_case "$CUR_OUT" "$WORK/init-os.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "系统名读到了 os-release" "$CUR_OUT" "Ubuntu 24.04.1 LTS"
+check_has "脚本版本号仍是 v1.0.0" "$CUR_OUT" "ACXC16-VPS新机一键脚本  v1.0.0"
+check_hasnt "没把 Ubuntu 的 VERSION 当成脚本版本" "$CUR_OUT" "Noble Numbat"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
