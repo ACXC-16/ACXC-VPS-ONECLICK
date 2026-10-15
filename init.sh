@@ -11,8 +11,8 @@
 #      sudo bash <(curl -fsSL https://raw.githubusercontent.com/ACXC-16/ACXC-VPS-ONECLICK/main/init.sh)
 #
 #  测试用环境变量（普通用户不用管，CI / 本地测试才会用到）:
-#    VPS_INIT_ALLOW_NONROOT=1  配合 --dry-run 允许非 root 运行
-#    VPS_INIT_FORCE_STDIN=1    强制从 stdin 读取回答（测试脚本喂答案用）
+#    ACXC_VPS_ALLOW_NONROOT=1  配合 --dry-run 允许非 root 运行
+#    ACXC_VPS_FORCE_STDIN=1    强制从 stdin 读取回答（测试脚本喂答案用）
 #
 #  设计原则：
 #    * 每一步执行前都单独询问 Y/N，默认值写在 STEPS 表里
@@ -35,14 +35,22 @@ REPO_SLUG="ACXC-16/ACXC-VPS-ONECLICK"
 DEFAULT_SSH_PORT="52052"
 # 菜单里选「使用默认设置」时用的 root 密码
 DEFAULT_ROOT_PASSWORD="acxc1616"
-MANAGED_SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-init.conf"
-FAIL2BAN_CONF="/etc/fail2ban/jail.d/vps-init.local"
-SYSCTL_BBR_CONF="/etc/sysctl.d/99-vps-init-bbr.conf"
+# 旧版本（vps-init 前缀）留下的路径：升级时自动改名，见 migrate_legacy_paths
+LEGACY_SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-init.conf"
+LEGACY_F2B_CONF="/etc/fail2ban/jail.d/vps-init.local"
+LEGACY_BBR_CONF="/etc/sysctl.d/99-vps-init-bbr.conf"
+LEGACY_SWAP_CONF="/etc/sysctl.d/99-vps-init-swap.conf"
+LEGACY_LOG="/var/log/vps-init.log"
+LEGACY_BACKUP_DIR="/root/vps-init-backup"
+
+MANAGED_SSHD_CONF="/etc/ssh/sshd_config.d/00-acxc-vps.conf"
+FAIL2BAN_CONF="/etc/fail2ban/jail.d/acxc-vps.local"
+SYSCTL_BBR_CONF="/etc/sysctl.d/99-acxc-vps-bbr.conf"
 SWAPFILE="/swapfile"
 # 需要重启的标记文件（一般不用改；测试时会指向临时文件）
-REBOOT_REQUIRED_FILE="${VPS_INIT_REBOOT_REQUIRED:-/var/run/reboot-required}"
+REBOOT_REQUIRED_FILE="${ACXC_VPS_REBOOT_REQUIRED:-/var/run/reboot-required}"
 
-LOG_FILE="${VPS_INIT_LOG:-/var/log/vps-init.log}"
+LOG_FILE="${ACXC_VPS_LOG:-/var/log/acxc-vps.log}"
 REPLY=""
 TTY_OK=0
 DRY_RUN=0
@@ -81,9 +89,9 @@ STEPS=(
 )
 
 # 快捷命令：安装成 acxc，以后直接输入 acxc 就能打开
-SHORTCUT_DIR="${VPS_INIT_SHORTCUT_DIR:-/usr/local/bin}"
+SHORTCUT_DIR="${ACXC_VPS_SHORTCUT_DIR:-/usr/local/bin}"
 SHORTCUT_NAME="acxc"
-CACHE_DIR="${VPS_INIT_CACHE_DIR:-/usr/local/share/acxc}"
+CACHE_DIR="${ACXC_VPS_CACHE_DIR:-/usr/local/share/acxc}"
 
 # ============================== 输出与日志 ==================================
 C_RST=''; C_BLD=''; C_GRN=''; C_YEL=''; C_RED=''; C_CYN=''; C_DIM=''
@@ -150,7 +158,7 @@ prepare_log() {
   dir="$(dirname "$LOG_FILE")"
   if [ ! -d "$dir" ]; then mkdir -p "$dir" 2>/dev/null || true; fi
   if ! { : 2>/dev/null >>"$LOG_FILE"; }; then
-    LOG_FILE="/tmp/vps-init.log"
+    LOG_FILE="/tmp/acxc-vps.log"
     if ! { : 2>/dev/null >>"$LOG_FILE"; }; then LOG_FILE=""; fi
   fi
   if [ -n "$LOG_FILE" ]; then chmod 600 "$LOG_FILE" 2>/dev/null || true; fi
@@ -167,8 +175,8 @@ init_log() {
 # （容器、面板、无控制终端的场景下 /dev/tty 存在但打不开，此时要退回 stdin）。
 detect_tty() {
   TTY_OK=0
-  # 测试时可以用 VPS_INIT_FORCE_STDIN=1 强制从 stdin 读答案
-  if [ "${VPS_INIT_FORCE_STDIN:-0}" = "1" ]; then return 0; fi
+  # 测试时可以用 ACXC_VPS_FORCE_STDIN=1 强制从 stdin 读答案
+  if [ "${ACXC_VPS_FORCE_STDIN:-0}" = "1" ]; then return 0; fi
   if ( : </dev/tty ) 2>/dev/null && ( : >/dev/tty ) 2>/dev/null; then
     TTY_OK=1
   fi
@@ -437,7 +445,7 @@ ssh_managed_block() {
   if [ -z "${SSH_M_PORTS}${SSH_M_PERMIT_ROOT_LOGIN}${SSH_M_PASSWORD_AUTH}" ]; then
     return 0
   fi
-  printf '%s\n' "# --- vps-init managed block: start ---"
+  printf '%s\n' "# --- acxc-vps managed block: start ---"
   printf '%s\n' "# 本文件由 ${SCRIPT_NAME} 生成；手工修改后请执行: systemctl restart ssh"
   # shellcheck disable=SC2086
   for p in $SSH_M_PORTS; do
@@ -449,7 +457,7 @@ ssh_managed_block() {
   if [ -n "$SSH_M_PASSWORD_AUTH" ]; then
     printf 'PasswordAuthentication %s\n' "$SSH_M_PASSWORD_AUTH"
   fi
-  printf '%s\n' "# --- vps-init managed block: end ---"
+  printf '%s\n' "# --- acxc-vps managed block: end ---"
   return 0
 }
 
@@ -461,17 +469,73 @@ ssh_managed_keys() {
 }
 
 # 把上次运行留下的受管设置读回来，避免只跑其中一个步骤时把另一个覆盖掉
+# ===================== 旧文件名迁移（vps-init → acxc-vps） ==================
+# 早期版本用的是 vps-init 前缀，升级后要把这些文件改名，否则会出现两份配置：
+# fail2ban 会因重复 jail 启动失败、sshd 会同时监听两个端口。
+migrate_legacy_paths() {
+  local moved=0 pair old new
+  local -a pairs=(
+    "${LEGACY_SSHD_CONF}|${MANAGED_SSHD_CONF}"
+    "${LEGACY_F2B_CONF}|${FAIL2BAN_CONF}"
+    "${LEGACY_BBR_CONF}|${SYSCTL_BBR_CONF}"
+    "${LEGACY_SWAP_CONF}|/etc/sysctl.d/99-acxc-vps-swap.conf"
+  )
+
+  # 日志：旧内容追加进新文件，然后删掉旧的，不丢历史
+  if [ -f "$LEGACY_LOG" ] && [ "$LEGACY_LOG" != "$LOG_FILE" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      info "[dry-run] 将把旧日志合并进 ${LOG_FILE} 并删除 ${LEGACY_LOG}"
+    elif cat "$LEGACY_LOG" >>"$LOG_FILE" 2>/dev/null; then
+      rm -f "$LEGACY_LOG" 2>/dev/null && info "旧日志已并入：${LEGACY_LOG} → ${LOG_FILE}"
+    fi
+  fi
+
+  for pair in "${pairs[@]}"; do
+    old="${pair%%|*}"; new="${pair#*|}"
+    [ "$old" = "$new" ] && continue
+    [ -e "$old" ] || continue
+    if [ -e "$new" ]; then
+      warn "发现旧文件 ${old}，而新文件 ${new} 已存在：请确认后手动删除旧文件（两个都生效可能冲突）"
+      continue
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+      info "[dry-run] 将把旧文件改名：${old} → ${new}"
+      continue
+    fi
+    if mv -f "$old" "$new" 2>/dev/null; then
+      # 文件里的旧标记/注释一起换掉（管理块标记必须换，否则读不回来）
+      sed -i 's/vps-init/acxc-vps/g' "$new" 2>/dev/null || true
+      info "旧文件已改名：${old} → ${new}"
+      moved=1
+    else
+      warn "旧文件改名失败：${old}（可手动执行 mv ${old} ${new}）"
+    fi
+  done
+
+  # 备份目录
+  if [ -d "$LEGACY_BACKUP_DIR" ] && [ ! -e /root/acxc-vps-backup ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      info "[dry-run] 将把旧备份目录改名：${LEGACY_BACKUP_DIR} → /root/acxc-vps-backup"
+    elif mv -f "$LEGACY_BACKUP_DIR" /root/acxc-vps-backup 2>/dev/null; then
+      info "旧备份目录已改名：${LEGACY_BACKUP_DIR} → /root/acxc-vps-backup"
+    fi
+  fi
+
+  [ "$moved" -eq 1 ] && invalidate_status
+  return 0
+}
+
 ssh_load_managed() {
   SSH_M_PORTS=""; SSH_M_PERMIT_ROOT_LOGIN=""; SSH_M_PASSWORD_AUTH=""
   local src="" parsed="" kind rest
   if [ -f "$MANAGED_SSHD_CONF" ]; then
     src="$MANAGED_SSHD_CONF"
-  elif [ -f /etc/ssh/sshd_config ] && grep -q 'vps-init managed block: start' /etc/ssh/sshd_config 2>/dev/null; then
+  elif [ -f /etc/ssh/sshd_config ] && grep -qE '(vps-init|acxc-vps) managed block: start' /etc/ssh/sshd_config 2>/dev/null; then
     src="/etc/ssh/sshd_config"
   else
     return 0
   fi
-  parsed="$(sed -n '/vps-init managed block: start/,/vps-init managed block: end/p' "$src" 2>/dev/null |
+  parsed="$(sed -n -E '/# --- (vps-init|acxc-vps) managed block: start ---/,/# --- (vps-init|acxc-vps) managed block: end ---/p' "$src" 2>/dev/null |
     awk 'tolower($1)=="port"{printf "P %s\n", $2}
          tolower($1)=="permitrootlogin"{printf "R %s\n", $2}
          tolower($1)=="passwordauthentication"{printf "A %s\n", $2}')"
@@ -498,7 +562,7 @@ comment_out_main_key() { # $1=配置文件 $2=指令名（小写）
         print; next
       }
       if (!inmatch && low ~ ("^[[:space:]]*" key "[[:space:]]")) {
-        printf "# %s  # vps-init: disabled\n", $0
+        printf "# %s  # acxc-vps: disabled\n", $0
         next
       }
       print
@@ -513,7 +577,7 @@ comment_out_main_key() { # $1=配置文件 $2=指令名（小写）
 remove_managed_inline_block() {
   local conf="$1"
   [ -f "$conf" ] || return 0
-  sed -i '/# --- vps-init managed block: start ---/,/# --- vps-init managed block: end ---/d' "$conf"
+  sed -i -E '/# --- (vps-init|acxc-vps) managed block: start ---/,/# --- (vps-init|acxc-vps) managed block: end ---/d' "$conf"
   return 0
 }
 
@@ -791,7 +855,7 @@ ssh_apply_port() {
 
   # 备份
   stamp="$(date '+%Y%m%d-%H%M%S')"
-  bak="/root/vps-init-backup/${stamp}-ssh"
+  bak="/root/acxc-vps-backup/${stamp}-ssh"
   LAST_SSH_BACKUP="$bak"
   run mkdir -p "$bak"
   run cp -a /etc/ssh/sshd_config "${bak}/sshd_config"
@@ -1179,9 +1243,9 @@ create_swap() {
     return 1
   fi
   if ! grep -qF "$SWAPFILE" /etc/fstab 2>/dev/null; then
-    printf '%s\n' "${SWAPFILE} none swap sw 0 0  # vps-init" >>/etc/fstab
+    printf '%s\n' "${SWAPFILE} none swap sw 0 0  # acxc-vps" >>/etc/fstab
   fi
-  printf '%s\n' 'vm.swappiness=10' >/etc/sysctl.d/99-vps-init-swap.conf
+  printf '%s\n' 'vm.swappiness=10' >/etc/sysctl.d/99-acxc-vps-swap.conf
   sysctl -q -w vm.swappiness=10 >/dev/null 2>&1 || true
   ok "Swap 已启用：$(free -h 2>/dev/null | awk '/^Swap:/{print $2}')"
   return 0
@@ -1257,7 +1321,7 @@ enable_bbr() {
     modprobe tcp_bbr 2>/dev/null || warn "modprobe tcp_bbr 失败（容器/共享内核环境属正常）"
   fi
   cat >"$SYSCTL_BBR_CONF" <<'EOF'
-# 由 vps-init 生成：开启 TCP BBR
+# 由 acxc-vps 生成：开启 TCP BBR
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 EOF
@@ -1419,7 +1483,7 @@ EOF
 
 install_shortcut() { # $1=quiet：自动安装时用，没变化就完全不说话
   local quiet="${1:-}" target="${SHORTCUT_DIR}/${SHORTCUT_NAME}" tmp="" changed=0 src=""
-  if [ "$DRY_RUN" -eq 1 ] && [ -z "${VPS_INIT_SHORTCUT_DIR:-}" ]; then
+  if [ "$DRY_RUN" -eq 1 ] && [ -z "${ACXC_VPS_SHORTCUT_DIR:-}" ]; then
     info "[dry-run] 将安装快捷命令：${target}"
     return 0
   fi
@@ -1927,7 +1991,7 @@ banner() {
 
 require_root() {
   if [ "$(id -u)" -eq 0 ]; then return 0; fi
-  if [ "$DRY_RUN" -eq 1 ] && [ "${VPS_INIT_ALLOW_NONROOT:-0}" = "1" ]; then
+  if [ "$DRY_RUN" -eq 1 ] && [ "${ACXC_VPS_ALLOW_NONROOT:-0}" = "1" ]; then
     warn "非 root + dry-run 模式：仅供本地测试，不会修改系统。"
     return 0
   fi
@@ -2019,7 +2083,7 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）
       --no-color       关闭彩色输出
-      --log-file <路径> 指定日志文件（默认 /var/log/vps-init.log）
+      --log-file <路径> 指定日志文件（默认 /var/log/acxc-vps.log）
       --list           列出所有步骤标识与默认值后退出
   -h, --help           显示本帮助
   -V, --version        显示版本号
@@ -2037,7 +2101,7 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
 安全提示:
   * 改 SSH 端口前，请先在云服务商控制台的安全组放行新端口，并保持当前会话不要断开。
   * 修改后先另开终端确认 ssh -p <新端口> 能登录，再关闭旧连接。
-  * 所有改动都会记录到日志文件（默认 /var/log/vps-init.log）。
+  * 所有改动都会记录到日志文件（默认 /var/log/acxc-vps.log）。
 EOF
 }
 
@@ -2105,6 +2169,7 @@ main() {
   check_tty
   check_os
   export DEBIAN_FRONTEND=noninteractive
+  migrate_legacy_paths
   ssh_load_managed
   # 自动装好快捷命令（下次直接输 acxc 就能打开；内容没变则静默跳过）
   install_shortcut quiet 2>/dev/null || true
