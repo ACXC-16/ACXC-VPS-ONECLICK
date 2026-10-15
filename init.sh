@@ -53,6 +53,15 @@ FAILED_COUNT=0
 OS_PRETTY="未知"
 LAST_SSH_BACKUP=""
 
+# 界面：auto = 有 whiptail 就用图形界面，否则回退文字问答；whiptail / plain = 强制
+UI_MODE="${VPS_INIT_UI:-auto}"
+UI_BACKEND="plain"
+UI_LOCALE="C.UTF-8"
+UI_LINES=24
+UI_COLS=80
+UI_W=76
+UI_H=14
+
 # 受管的 SSH 设置（脚本重启后会从受管配置里读回来，避免覆盖上次的设置）
 SSH_M_PORTS=""
 SSH_M_PERMIT_ROOT_LOGIN=""
@@ -152,6 +161,114 @@ detect_tty() {
   return 0
 }
 
+# ============================== 图形界面（whiptail） =========================
+# 说明：whiptail 把"界面"画在 stdout、把"用户的选择"写到 stderr，
+# 所以要用 3>&1 1>&2 2>&3 交换一下才能用 $(...) 取回结果；
+# 又因为 curl | bash 时 stdin 是脚本本身，必须把键盘输入接到 /dev/tty。
+ui_init_size() {
+  local sz=""
+  if [ "$TTY_OK" -eq 1 ]; then
+    sz="$(stty size < /dev/tty 2>/dev/null)" || sz=""
+  fi
+  if [ -n "$sz" ]; then
+    UI_LINES="${sz%% *}"
+    UI_COLS="${sz##* }"
+  fi
+  case "$UI_LINES" in ''|*[!0-9]*) UI_LINES=24 ;; esac
+  case "$UI_COLS" in ''|*[!0-9]*) UI_COLS=80 ;; esac
+  [ "$UI_LINES" -lt 12 ] && UI_LINES=24
+  [ "$UI_COLS" -lt 60 ] && UI_COLS=80
+  UI_W=$((UI_COLS - 4))
+  [ "$UI_W" -gt 78 ] && UI_W=78
+  [ "$UI_W" -lt 56 ] && UI_W=56
+  UI_H=$((UI_LINES - 8))
+  [ "$UI_H" -gt 16 ] && UI_H=16
+  [ "$UI_H" -lt 8 ] && UI_H=8
+  return 0
+}
+
+# 调用 whiptail：结果放 REPLY，退出码原样返回
+_ui_run() {
+  local rc=0 out=""
+  if [ "$TTY_OK" -eq 1 ]; then
+    out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
+  else
+    # 没有终端时不做 fd 交换（测试用 mock whiptail 走这条分支）
+    out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 2>&1 1>/dev/null)" || rc=$?
+  fi
+  REPLY="$out"
+  return "$rc"
+}
+
+# 提示框：图形模式弹窗，文字模式直接打印
+ui_msg() { # $1=标题 $2=内容
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    _ui_run --title "$1" --msgbox "$2" "$UI_H" "$UI_W" || true
+  else
+    info "$2"
+  fi
+  return 0
+}
+
+ui_selftest() { # 返回 0 = 图形界面可用
+  local rc=0
+  _ui_run --title "vps-init 界面自检" \
+    --yesno "接下来会用这样的方框菜单来操作。\n\n你能正常看到这个方框吗？\n\n  <Yes>  用图形界面\n  <No>   改用文字问答" \
+    13 68 || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 决定用哪种界面：--ui=auto 时尽量用图形界面，任何异常都退回文字问答
+ui_detect() {
+  UI_BACKEND="plain"
+  [ "$UI_MODE" = "plain" ] && return 0
+
+  if ! have whiptail; then
+    if [ "$UI_MODE" = "whiptail" ] || [ "$UI_MODE" = "auto" ]; then
+      if [ "$TTY_OK" -eq 1 ] && have apt-get; then
+        if ask_yn "图形界面需要 whiptail 组件（很小），是否现在安装？" y; then
+          run env DEBIAN_FRONTEND=noninteractive apt-get -y install whiptail >/dev/null 2>&1 ||
+            warn "whiptail 安装失败，改用文字问答"
+        fi
+      fi
+    fi
+    if ! have whiptail; then
+      [ "$UI_MODE" = "whiptail" ] && warn "没有 whiptail，无法使用图形界面，改用文字问答"
+      return 0
+    fi
+  fi
+
+  if [ "$TTY_OK" -ne 1 ]; then
+    if [ "$UI_MODE" = "whiptail" ]; then
+      warn "当前没有可用终端，仍按 --ui=whiptail 尝试（显示可能异常）"
+      UI_BACKEND="whiptail"
+    fi
+    return 0
+  fi
+
+  # 方框里是中文，需要 UTF-8 locale，否则会乱码
+  UI_LOCALE="C"
+  if have locale && locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
+    UI_LOCALE="C.UTF-8"
+  else
+    warn "系统没有 UTF-8 locale，图形界面里的中文可能乱码，改用文字问答（可用 --ui=whiptail 强制）"
+    return 0
+  fi
+
+  ui_init_size
+  if ui_selftest; then
+    UI_BACKEND="whiptail"
+    _log_raw UI "使用图形界面（whiptail）"
+  else
+    info "改用文字问答模式（随时可以用 --ui=whiptail 再试）"
+  fi
+  return 0
+}
+
+
 _prompt_line() { # $1=提示语 $2=默认值 → REPLY
   local p="$1" d="${2-}" line=""
   if [ "$TTY_OK" -eq 1 ]; then
@@ -173,6 +290,12 @@ _prompt_line() { # $1=提示语 $2=默认值 → REPLY
 
 _prompt_secret() { # $1=提示语 → REPLY（不回显）
   local p="$1" line=""
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    local rc=0
+    _ui_run --title "vps-init" --passwordbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" || rc=$?
+    [ "$rc" -eq 0 ] || return 1
+    return 0
+  fi
   if [ "$TTY_OK" -eq 1 ]; then
     IFS= read -r -s -p "$p" line < /dev/tty || return 1
     printf '\n' 2>/dev/null > /dev/tty
@@ -196,6 +319,17 @@ ask_yn() {
     printf '%s\n' "${C_DIM}  [自动回答] $q -> N${C_RST}"
     _log_raw AUTO "$q -> N"
     return 1
+  fi
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    local rc=0 extra=""
+    [ "$def" = n ] && extra="--defaultno"
+    # shellcheck disable=SC2086
+    _ui_run --title "vps-init" $extra --yesno "$(printf '%b' "$q")" "$UI_H" "$UI_W" || rc=$?
+    case "$rc" in
+      0) _log_raw ANSWER "$q -> Y"; return 0 ;;
+      1) _log_raw ANSWER "$q -> N"; return 1 ;;
+      *) warn "图形界面异常（退出码 ${rc}），本次按「否」处理"; return 1 ;;
+    esac
   fi
   hint="[y/N]"; [ "$def" = y ] && hint="[Y/n]"
   while :; do
@@ -221,6 +355,22 @@ ask_value() {
     _log_raw AUTO "$p -> ${def:-<空>}"
     REPLY="$def"
     if [ -n "$def" ]; then return 0; fi
+    return 1
+  fi
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    local rc=0 tries=0
+    while [ "$tries" -lt 20 ]; do
+      tries=$((tries + 1))
+      rc=0
+      _ui_run --title "vps-init" --inputbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" "$def" || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        warn "已取消输入"
+        return 1
+      fi
+      if [ -n "$REPLY" ]; then return 0; fi
+      if [ -n "$def" ]; then REPLY="$def"; return 0; fi
+      warn "输入不能为空"
+    done
     return 1
   fi
   while :; do
@@ -737,6 +887,9 @@ step_ssh_port() {
     esac
   fi
 
+  # 改端口前的安全提示（图形界面会弹窗，文字模式直接打印）
+  ui_msg "改 SSH 端口前的检查" "① 云服务商控制台的「安全组 / 防火墙」要先放行 ${new_port}/TCP\n② 当前 SSH 会话不要断开（重启 sshd 不会踢掉已登录的连接）\n③ 改完后另开一个终端用 ssh -p ${new_port} 验证，成功再关旧连接\n④ 万一连不上，用 VNC/控制台登录后执行回滚命令（脚本最后会打印）"
+
   # 本机防火墙放行
   info "检查本机防火墙…"
   if have ufw && ufw status 2>/dev/null | grep -q "^Status: active"; then
@@ -1194,8 +1347,76 @@ list_steps() {
   printf '\n用法：--only sysupdate,ssh-port   /   --skip tools\n'
 }
 
+plan_add() { # $1=步骤标识 → 追加到执行计划
+  local entry slug title def fn
+  for entry in "${STEPS[@]}"; do
+    IFS='|' read -r slug title def fn <<<"$entry"
+    if [ "$slug" = "$1" ]; then
+      PLAN_SLUGS+=("$slug"); PLAN_TITLES+=("$title"); PLAN_FUNCS+=("$fn")
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 图形界面：一屏勾选所有步骤
+build_plan_tui() {
+  local entry slug title def fn rc=0 item
+  local -a args=()
+  local h=$(( ${#STEPS[@]} + 9 ))
+  local listh=$(( ${#STEPS[@]} + 1 ))
+  [ "$h" -gt 22 ] && h=22
+  [ "$listh" -gt 14 ] && listh=14
+
+  for entry in "${STEPS[@]}"; do
+    IFS='|' read -r slug title def fn <<<"$entry"
+    if [ "$def" = y ]; then
+      args+=("$slug" "$title" "ON")
+    else
+      args+=("$slug" "$title" "OFF")
+    fi
+  done
+
+  _ui_run --title "vps-init · 选择要执行的步骤" --separate-output \
+    --checklist "空格 = 勾选/取消    方向键 = 移动    Tab = 切到 <Ok>    回车 = 确认\n\n标 ON 的是推荐默认项，不想做的取消勾选即可。" \
+    "$h" "$UI_W" "$listh" "${args[@]}" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "已取消选择，未做任何修改。"
+    exit 0
+  fi
+  if [ -z "$REPLY" ]; then
+    warn "没有勾选任何步骤，退出。"
+    exit 0
+  fi
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    plan_add "$item" || warn "未知步骤：$item"
+  done <<<"$REPLY"
+  return 0
+}
+
 build_plan() {
   local entry slug title def fn i=0 total=${#STEPS[@]}
+
+  # 指定了 --only / --skip 就按清单执行，不再逐项询问
+  if [ -n "$ONLY_LIST" ] || [ -n "$SKIP_LIST" ]; then
+    for entry in "${STEPS[@]}"; do
+      IFS='|' read -r slug title def fn <<<"$entry"
+      if [ -n "$ONLY_LIST" ] && ! in_list "$slug" "$ONLY_LIST"; then continue; fi
+      if [ -n "$SKIP_LIST" ] && in_list "$slug" "$SKIP_LIST"; then
+        info "按 --skip 跳过：${title}"
+        continue
+      fi
+      plan_add "$slug"
+    done
+    return 0
+  fi
+
+  # 图形界面：一屏勾选
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    build_plan_tui
+    return 0
+  fi
 
   title "可执行步骤（共 ${total} 项）"
   for entry in "${STEPS[@]}"; do
@@ -1213,17 +1434,8 @@ build_plan() {
 
   for entry in "${STEPS[@]}"; do
     IFS='|' read -r slug title def fn <<<"$entry"
-    if [ -n "$ONLY_LIST" ] && ! in_list "$slug" "$ONLY_LIST"; then continue; fi
-    if [ -n "$SKIP_LIST" ] && in_list "$slug" "$SKIP_LIST"; then
-      info "按 --skip 跳过：${title}"
-      continue
-    fi
-    if [ -n "$ONLY_LIST" ]; then
-      PLAN_SLUGS+=("$slug"); PLAN_TITLES+=("$title"); PLAN_FUNCS+=("$fn")
-      continue
-    fi
     if ask_yn "执行「${title}」？" "$def"; then
-      PLAN_SLUGS+=("$slug"); PLAN_TITLES+=("$title"); PLAN_FUNCS+=("$fn")
+      plan_add "$slug"
     else
       info "已跳过：${title}"
     fi
@@ -1428,6 +1640,8 @@ vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
       --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
       --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
+      --ui <模式>      界面模式：auto（默认，能用就用图形界面）/ whiptail / plain
+      --text           等价于 --ui=plain，强制用文字问答（老式 [Y/n]）
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）
       --no-color       关闭彩色输出
       --log-file <路径> 指定日志文件（默认 /var/log/vps-init.log）
@@ -1463,6 +1677,9 @@ parse_args() {
       --dry-run) DRY_RUN=1 ;;
       --force) FORCE_OS=1 ;;
       --no-color) COLOR_OFF=1 ;;
+      --ui) shift; UI_MODE="${1:-auto}"; [ -n "${1:-}" ] || die "--ui 需要一个参数" ;;
+      --ui=*) UI_MODE="${1#*=}" ;;
+      --text) UI_MODE="plain" ;;
       --log-file) shift; LOG_FILE="${1:-$LOG_FILE}"; [ -n "${1:-}" ] || die "--log-file 需要一个参数" ;;
       --log-file=*) LOG_FILE="${1#*=}" ;;
       --list) list_steps; exit 0 ;;
@@ -1503,6 +1720,7 @@ main() {
   export DEBIAN_FRONTEND=noninteractive
   show_system_info
   ssh_load_managed
+  ui_detect
   build_plan
   confirm_plan
   run_plan

@@ -175,6 +175,117 @@ check_has "明确只升级内核/驱动/固件" "$CUR_OUT" "只升级内核 / �
 check_has "全量升级默认不执行" "$CUR_OUT" "保持不动：本次不升级其它软件包"
 check_has "清理默认不执行" "$CUR_OUT" "是否清理不再需要的依赖包（apt autoremove --purge）？ -> N"
 
+echo "== 12) 图形界面 --ui=whiptail：勾选 / 输入框 / 取消 =="
+mkdir -p "$WORK/bin"
+cat >"$WORK/bin/whiptail" <<'MOCK'
+#!/usr/bin/env bash
+# 测试用的 mock whiptail：不画界面，按顺序从 MOCK_ANSWERS 文件里取答案，
+# 结果写到 stderr（与真实 whiptail 的约定一致）。
+set -u
+ANSWERS="${MOCK_ANSWERS:?需要设置 MOCK_ANSWERS}"
+IDX_FILE="${MOCK_ANSWERS}.idx"
+idx=0
+[ -f "$IDX_FILE" ] && idx="$(cat "$IDX_FILE")"
+idx=$((idx + 1))
+printf '%s' "$idx" >"$IDX_FILE"
+answer="$(sed -n "${idx}p" "$ANSWERS")"
+
+type=""
+title=""
+prev=""
+for a in "$@"; do
+  case "$a" in
+    --yesno) type=yesno ;;
+    --inputbox|--passwordbox) type=input ;;
+    --checklist) type=checklist ;;
+    --msgbox) type=msgbox ;;
+  esac
+  [ "$prev" = "--title" ] && title="$a"
+  prev="$a"
+done
+
+# 记一笔"弹过什么框"，便于断言
+if [ -n "${MOCK_LOG:-}" ]; then
+  printf '%s|%s\n' "$type" "$title" >>"$MOCK_LOG"
+fi
+
+case "$type" in
+  yesno)
+    case "$answer" in
+      yes) exit 0 ;;
+      no) exit 1 ;;
+      *) exit 255 ;;
+    esac ;;
+  input)
+    case "$answer" in
+      ok:*) printf '%s' "${answer#ok:}" >&2; exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  checklist)
+    case "$answer" in
+      check:*)
+        printf '%s\n' "${answer#check:}" | tr ',' '\n' >&2
+        exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  msgbox)
+    case "$answer" in
+      ok) exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  *) exit 0 ;;
+esac
+MOCK
+chmod +x "$WORK/bin/whiptail"
+
+tui_case() { # $1=输出文件 $2=答案文件，其余为参数
+  local out="$1" ans="$2"
+  shift 2
+  rm -f "$ans.idx" "$out.log"
+  MOCK_ANSWERS="$ans" MOCK_LOG="$out.log" PATH="$WORK/bin:$PATH" \
+    VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
+    bash "$@" >"$out" 2>&1
+  printf '%s' "$?"
+}
+
+# A：勾选只跑 sysupdate，后续三个可选项都答否
+printf 'check:sysupdate\nyes\nno\nno\nno\n' >"$WORK/ans-a"
+CUR_OUT="$WORK/tui-a.out"
+rc="$(tui_case "$CUR_OUT" "$WORK/ans-a" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
+check "勾选流程退出码" "0" "$rc"
+check_has "弹出的第一个框是步骤勾选清单" "$CUR_OUT.log" "checklist|vps-init · 选择要执行的步骤"
+check_has "只执行勾选的步骤" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
+check_has "全量升级仍默认否" "$CUR_OUT" "保持不动：本次不升级其它软件包"
+
+# B：在勾选界面按取消
+printf 'cancel\n' >"$WORK/ans-b"
+CUR_OUT="$WORK/tui-b.out"
+rc="$(tui_case "$CUR_OUT" "$WORK/ans-b" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
+check "取消后正常退出" "0" "$rc"
+check_has "提示已取消" "$CUR_OUT" "已取消选择"
+
+# C：勾选界面一个都不选
+printf 'check:\n' >"$WORK/ans-c"
+CUR_OUT="$WORK/tui-c.out"
+rc="$(tui_case "$CUR_OUT" "$WORK/ans-c" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
+check "空勾选正常退出" "0" "$rc"
+check_has "提示没有勾选" "$CUR_OUT" "没有勾选任何步骤"
+
+# D：输入框填端口（确认框 yes → 输入框 52052 → 过渡期 yes → 提示框 ok）
+printf 'yes\nok:52052\nyes\nok\n' >"$WORK/ans-d"
+CUR_OUT="$WORK/tui-d.out"
+rc="$(tui_case "$CUR_OUT" "$WORK/ans-d" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail --only ssh-port)"
+check "输入框流程退出码" "0" "$rc"
+check_has "输入框的值传进端口配置" "$CUR_OUT" "Port 52052"
+check_has "弹出了改端口提示框" "$CUR_OUT.log" "msgbox|改 SSH 端口前的检查"
+
+# E：输入框按取消 → 步骤失败、退出码 1
+printf 'yes\ncancel\n' >"$WORK/ans-e"
+CUR_OUT="$WORK/tui-e.out"
+rc="$(tui_case "$CUR_OUT" "$WORK/ans-e" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail --only ssh-port)"
+check "取消输入后步骤失败" "1" "$rc"
+check_has "提示已取消输入" "$CUR_OUT" "已取消输入"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
