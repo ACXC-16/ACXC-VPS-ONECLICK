@@ -10,8 +10,8 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
 curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
 ```
 
-> 当前版本 **v1.0.1**，发布页：<https://github.com/qinjing-arch/VPS-init/releases>
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.1` 即可。
+> 当前版本 **v1.0.2**，发布页：<https://github.com/qinjing-arch/VPS-init/releases>
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.2` 即可。
 
 ---
 
@@ -38,13 +38,26 @@ curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh 
 
 **命令的实际输出（apt 那些日志）仍然是普通滚动文字**，不会藏进方框里 —— 出问题你还能直接复制给我看。
 
-### 万一你的终端显示不出来
+### 怎么操作（重要，第一次用请看这里）
 
-不会卡死，会自动退回原来的文字问答模式：
+| 按键 | 作用 |
+| --- | --- |
+| `↑` `↓` | 在列表里移动 |
+| `空格` | 勾选 / 取消勾选当前项 |
+| `Tab`（或 `←` `→`） | 在列表和底部按钮 `<Ok>` / `<Cancel>` 之间切换 |
+| `回车` | 确认当前高亮的按钮（Yes / No / Ok / Cancel） |
+| `ESC` | 取消当前方框 |
 
-- 首次进入图形界面会先弹一个 **「界面自检」框**，问你能不能看到这个方框；看不到就选 `No`（或按 ESC），脚本马上改用文字模式；
+**注意：方框里直接敲 `y` / `n` 是没反应**——必须先 `Tab`/`←→` 把高亮切到 `<Yes>` 或 `<No>`，再按回车。每个是否框里的文字末尾都写了这条提示。
+
+### 卡住也不会卡死
+
+- **等不到操作会自动退出方框**：如果方框里按键完全没反应，自检框 25 秒、普通方框 300 秒后会**自动切回文字问答模式**继续跑，不需要你做什么；
+  （想改等待时间：`VPS_INIT_UI_TIMEOUT=60`，单位秒）
+- 首次进入图形界面会先弹一个 **「界面自检」框**，问你要不要用图形界面；选 `<No>` 就立刻改用文字问答；
 - 系统里没有 `whiptail`（图形界面组件，几十 KB）时会先问你要不要装，不装就用文字模式；
-- 系统没有 UTF-8 locale（中文会乱码）时，自动用文字模式。
+- 系统没有 UTF-8 locale（中文会乱码）、或者终端比 60×14 还小，也会自动用文字模式；
+- 实在不进图形界面：加 `--text`（或 `--ui=plain`）强制老式 `[Y/n]` 文字问答；想再试一次图形界面：`--ui=whiptail`。
 
 也可以强制指定：
 
@@ -264,7 +277,7 @@ STEPS=(
 
 ```bash
 bash -n init.sh          # 语法检查
-bash tests/smoke.sh      # 冒烟测试：59 项断言，全部在 --dry-run 下跑，不改系统
+bash tests/smoke.sh      # 冒烟测试：65 项断言，全部在 --dry-run 下跑，不改系统
 shellcheck init.sh tests/smoke.sh
 ```
 
@@ -377,8 +390,8 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 git add -A && git commit -m "feat: 新增 xxx" && git push
 
 # 2) 打个版本号 tag 并推送 —— GitHub 会自动跑测试、创建 Release、附上 init.sh
-git tag -a v1.0.1 -m "vps-init v1.0.1"
-git push origin v1.0.1
+git tag -a v1.0.2 -m "vps-init v1.0.2"
+git push origin v1.0.2
 ```
 
 发布完成后：
@@ -428,8 +441,8 @@ sha256sum -c SHA256SUMS.txt
 ```
 vps-init/
 ├── init.sh                    # 主脚本（一键执行的就是它）
-├── tests/smoke.sh             # 冒烟测试（59 项断言，dry-run，不改系统）
-├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 59 项冒烟测试
+├── tests/smoke.sh             # 冒烟测试（65 项断言，dry-run，不改系统）
+├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 65 项冒烟测试
 ├── .github/workflows/release.yml # 打 tag：测试通过后自动发 Release（附 init.sh + SHA256）
 ├── .gitattributes             # 强制 LF 换行（防止 Windows 上改坏脚本）
 ├── LICENSE                    # MIT
