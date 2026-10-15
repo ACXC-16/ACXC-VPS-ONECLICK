@@ -10,6 +10,49 @@ curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh 
 
 ---
 
+## 界面：默认是图形化菜单
+
+不用再一个个敲 `y/n` —— 脚本默认会弹出一个**方框菜单**，方向键移动、空格勾选、回车确认：
+
+```
+┌──────────── vps-init · 选择要执行的步骤 ─────────────┐
+│ 空格 = 勾选/取消   方向键 = 移动   Tab = 切到 <Ok>   │
+│                                                      │
+│      [*] 只更新内核 / 驱动 / 固件                    │
+│      [*] 修改 SSH 端口（默认 52052）                 │
+│      [*] 修改 root 密码                              │
+│      [ ] 安装配置 fail2ban（防 SSH 暴力破解）        │
+│      [ ] 时区 / Swap / BBR 网络加速                  │
+│      [ ] 安装常用命令行工具                          │
+│                                                      │
+│              <Ok>            <Cancel>                │
+└──────────────────────────────────────────────────────┘
+```
+
+配套的还有：端口/时区/Swap 用**输入框**、root 密码用**密码框**（不回显）、是否执行危险操作（全量升级、清理）用 **Yes/No 框**、改 SSH 端口前弹一个**检查清单提示框**。
+
+**命令的实际输出（apt 那些日志）仍然是普通滚动文字**，不会藏进方框里 —— 出问题你还能直接复制给我看。
+
+### 万一你的终端显示不出来
+
+不会卡死，会自动退回原来的文字问答模式：
+
+- 首次进入图形界面会先弹一个 **「界面自检」框**，问你能不能看到这个方框；看不到就选 `No`（或按 ESC），脚本马上改用文字模式；
+- 系统里没有 `whiptail`（图形界面组件，几十 KB）时会先问你要不要装，不装就用文字模式；
+- 系统没有 UTF-8 locale（中文会乱码）时，自动用文字模式。
+
+也可以强制指定：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--ui=auto` | 默认：能用图形界面就用，否则文字问答 |
+| `--ui=whiptail` | 强制图形界面（显示异常时也照用） |
+| `--text` | 强制文字问答（等于 `--ui=plain`），老式 `[Y/n]` |
+
+要求：终端至少 80×24（绝大多数 SSH 客户端默认就是），并且是真正的交互终端（用 `--yes` 无人值守时不需要界面）。
+
+---
+
 ## 功能一览
 
 | 步骤标识 | 做什么 | 默认值 |
@@ -66,6 +109,8 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/m
 | `--only <列表>` | 只执行列出的步骤，逗号分隔，例如 `--only sysupdate,ssh-port` |
 | `--skip <列表>` | 跳过列出的步骤，例如 `--skip tools,tuning` |
 | `--dry-run` | 演练模式：只打印将要执行的命令，不修改系统 |
+| `--ui <模式>` | 界面模式：`auto`（默认）/ `whiptail`（强制图形界面）/ `plain`（强制文字问答） |
+| `--text` | 等价于 `--ui=plain`，强制老式 `[Y/n]` 文字问答 |
 | `--force` | 跳过系统版本检测 |
 | `--no-color` | 关闭彩色输出 |
 | `--log-file <路径>` | 指定日志文件（默认 `/var/log/vps-init.log`） |
@@ -201,7 +246,7 @@ STEPS=(
 
 ```bash
 bash -n init.sh          # 语法检查
-bash tests/smoke.sh      # 冒烟测试：32 项断言，全部在 --dry-run 下跑，不改系统
+bash tests/smoke.sh      # 冒烟测试：49 项断言，全部在 --dry-run 下跑，不改系统
 shellcheck init.sh tests/smoke.sh
 ```
 
@@ -329,7 +374,7 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 ```
 vps-init/
 ├── init.sh                    # 主脚本（一键执行的就是它）
-├── tests/smoke.sh             # 冒烟测试（32 项断言，dry-run，不改系统）
+├── tests/smoke.sh             # 冒烟测试（49 项断言，dry-run，不改系统）
 ├── .github/workflows/ci.yml   # GitHub Actions：语法 + 测试 + ShellCheck
 ├── .gitattributes             # 强制 LF 换行（防止 Windows 上改坏脚本）
 ├── LICENSE                    # MIT
