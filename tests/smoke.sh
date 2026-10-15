@@ -197,7 +197,7 @@ check_has "打印了系统信息" "$CUR_OUT" "==== 系统信息 ===="
 echo "== 11) 菜单 9 = 全部按默认执行 =="
 CUR_OUT="$WORK/menu9.out"
 # 中间用一串 n 兜住各步骤的 y/n 提问（不同系统提问数量不一样），最后两行给 root 密码
-rc="$(printf '9\nnnnnnnnnnn\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --port 52052)"
+rc="$(printf '9\nn\nn\nn\nn\nn\nn\nn\nn\nn\nn\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --port 52052)"
 check "全部执行退出码" "0" "$rc"
 check_has "提示按默认项执行" "$CUR_OUT" "按默认项执行：1、2、3"
 check_has "计划里是 3 项" "$CUR_OUT" "步骤 1/3"
