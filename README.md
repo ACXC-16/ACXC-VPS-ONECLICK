@@ -8,9 +8,9 @@ Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可�
 curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
 ```
 
-> 当前版本 **v1.0.5** · 发布页 <https://github.com/qinjing-arch/VPS-init/releases>
+> 当前版本 **v1.0.6** · 发布页 <https://github.com/qinjing-arch/VPS-init/releases>
 > 界面按键不灵（方向键变 `^[[C` 乱码）就加 `--menu`；想用老式 `[Y/n]` 加 `--text`：在 `sudo bash` 后面补 `-s -- --menu` 即可。
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.5`。
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.6`。
 
 ---
 
@@ -169,7 +169,7 @@ VPS 上说的「驱动」就是**内核 + 内核模块 + 固件包**（GPU 驱�
    - 命中的包名规则：`linux-image*`、`linux-modules*`、`linux-modules-extra*`、`linux-firmware*`、`linux-generic`/`linux-virtual`/`linux-kvm`、`intel-microcode`/`amd64-microcode`（要加别的自行改脚本里的 `KERNEL_PKG_RE`）；
    - 用 `apt-get install --only-upgrade`，只升级、绝不新装无关包；没有可升级的会直接告诉你「已经是最新」；
 4. 然后是三个**默认「否」**的可选项：是否顺便把系统里**其它所有**软件包也升级（`apt full-upgrade`）、是否安装 `linux-firmware`、是否 `autoremove` 清理；
-5. 检测 `/var/run/reboot-required`，如果内核更新了会提示你重启（默认不自动重启）。
+5. 检测 `/var/run/reboot-required`，如果内核更新了会在最后问你要不要重启：**选 Y 就立刻重启，不再等倒计时**（重启前会打印重连命令，例如 `ssh -p 52052 root@你的IP`）；选 N 就留给你稍后自己 `reboot`。
 
 也就是说：**你按默认值一路回车，它只会更新驱动/内核，不会碰 nginx、MySQL、Docker 这些业务软件。**
 
@@ -282,7 +282,7 @@ STEPS=(
 
 ```bash
 bash -n init.sh          # 语法检查
-bash tests/smoke.sh      # 冒烟测试：90 项断言，全部在 --dry-run 下跑，不改系统
+bash tests/smoke.sh      # 冒烟测试：98 项断言，全部在 --dry-run 下跑，不改系统
 shellcheck init.sh tests/smoke.sh
 ```
 
@@ -395,8 +395,8 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 git add -A && git commit -m "feat: 新增 xxx" && git push
 
 # 2) 打个版本号 tag 并推送 —— GitHub 会自动跑测试、创建 Release、附上 init.sh
-git tag -a v1.0.5 -m "vps-init v1.0.5"
-git push origin v1.0.5
+git tag -a v1.0.6 -m "vps-init v1.0.6"
+git push origin v1.0.6
 ```
 
 发布完成后：
@@ -446,8 +446,8 @@ sha256sum -c SHA256SUMS.txt
 ```
 vps-init/
 ├── init.sh                    # 主脚本（一键执行的就是它）
-├── tests/smoke.sh             # 冒烟测试（90 项断言，dry-run，不改系统）
-├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 90 项冒烟测试
+├── tests/smoke.sh             # 冒烟测试（98 项断言，dry-run，不改系统）
+├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 98 项冒烟测试
 ├── .github/workflows/release.yml # 打 tag：测试通过后自动发 Release（附 init.sh + SHA256）
 ├── .gitattributes             # 强制 LF 换行（防止 Windows 上改坏脚本）
 ├── LICENSE                    # MIT

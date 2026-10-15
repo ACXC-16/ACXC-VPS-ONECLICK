@@ -418,6 +418,23 @@ else
   ok "默认模式全程没有调用 whiptail"
 fi
 
+echo "== 18) 选 Y 立即重启：不再等 10 秒，并提示重连方式 =="
+printf 'linux-base\n' >"$WORK/reboot-required"
+printf 'libc6\n' >"$WORK/reboot-required.pkgs"
+export VPS_INIT_REBOOT_REQUIRED="$WORK/reboot-required"
+CUR_OUT="$WORK/reboot.out"
+rc="$(printf '1\ny\nn\nn\nn\ny\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "重启流程退出码" "0" "$rc"
+check_has "提示需要重启" "$CUR_OUT" "系统需要重启"
+check_has "列出了触发重启的包" "$CUR_OUT" "触发重启的包：libc6"
+check_has "dry-run 下不真重启" "$CUR_OUT" "[dry-run] 将执行 reboot"
+if grep -qF '10 秒' "$CUR_OUT"; then
+  bad "不应该再等待 10 秒"
+else
+  ok "没有 10 秒等待（选 Y 直接重启）"
+fi
+unset VPS_INIT_REBOOT_REQUIRED
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="

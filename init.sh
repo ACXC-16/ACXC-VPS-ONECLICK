@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.5
+#  版本: 1.0.6
 #  仓库: https://github.com/qinjing-arch/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="vps-init"
-VERSION="1.0.5"
+VERSION="1.0.6"
 REPO_SLUG="qinjing-arch/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
@@ -37,6 +37,8 @@ MANAGED_SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-init.conf"
 FAIL2BAN_CONF="/etc/fail2ban/jail.d/vps-init.local"
 SYSCTL_BBR_CONF="/etc/sysctl.d/99-vps-init-bbr.conf"
 SWAPFILE="/swapfile"
+# 需要重启的标记文件（一般不用改；测试时会指向临时文件）
+REBOOT_REQUIRED_FILE="${VPS_INIT_REBOOT_REQUIRED:-/var/run/reboot-required}"
 
 LOG_FILE="${VPS_INIT_LOG:-/var/log/vps-init.log}"
 REPLY=""
@@ -945,11 +947,11 @@ step_sysupdate() {
     info "提示：本机没有内核元包（如 linux-image-generic），内核不会自动跟随更新；需要的话手动 apt install 即可。"
   fi
 
-  if [ -f /var/run/reboot-required ]; then
+  if [ -f "$REBOOT_REQUIRED_FILE" ]; then
     NEED_REBOOT=1
     warn "系统需要重启才能加载新内核/驱动。"
-    if [ -s /var/run/reboot-required.pkgs ]; then
-      info "触发重启的包：$(tr '\n' ' ' </var/run/reboot-required.pkgs)"
+    if [ -s "${REBOOT_REQUIRED_FILE}.pkgs" ]; then
+      info "触发重启的包：$(tr '\n' ' ' <"${REBOOT_REQUIRED_FILE}.pkgs")"
     fi
   fi
   ok "内核 / 驱动更新流程结束（当前运行内核：$(uname -r)）"
@@ -1796,8 +1798,8 @@ print_next_steps() {
 }
 
 maybe_reboot() {
-  local need=0
-  if [ -f /var/run/reboot-required ]; then need=1; fi
+  local need=0 p=""
+  if [ -f "$REBOOT_REQUIRED_FILE" ]; then need=1; fi
   if [ "$NEED_REBOOT" -eq 1 ]; then need=1; fi
   if [ "$need" -eq 0 ]; then return 0; fi
   printf '\n'
@@ -1807,9 +1809,16 @@ maybe_reboot() {
       info "[dry-run] 将执行 reboot"
       return 0
     fi
-    info "10 秒后重启，按 Ctrl+C 可取消…"
-    sleep 10
-    run reboot
+    # 选 Y 就直接重启，不再等待；先把重连方式打出来
+    p="$(printf '%s' "$SSH_M_PORTS" | awk '{print $1}')"
+    if [ -z "$p" ]; then p="$(trim "$(current_ssh_ports)")"; fi
+    info "立即重启（连接马上会断开）"
+    if [ -n "$p" ]; then
+      printf '  重启后重新连接：ssh -p %s root@<服务器IP>\n' "$p"
+    fi
+    if ! run reboot; then
+      warn "reboot 执行失败，请手动执行：reboot"
+    fi
     return 0
   fi
   info "稍后可手动执行：reboot"
