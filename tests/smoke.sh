@@ -323,7 +323,7 @@ printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
     bash "$WORK/init-fake.sh" --force --dry-run --ui=whiptail >"$CUR_OUT" 2>&1
 rc=$?
 check "降级后仍然跑完" "0" "$rc"
-check_has "提示已降级" "$CUR_OUT" "已自动切换为文字问答模式"
+check_has "提示已降级" "$CUR_OUT" "已改用文字问答"
 check_has "降级后仍能正常执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
 
 echo "== 14) 图形界面等不到操作（超时）也要自动降级，不能卡死 =="
@@ -341,8 +341,23 @@ printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
 rc=$?
 check "超时后仍然跑完" "0" "$rc"
 check_has "提示是等待超时" "$CUR_OUT" "等待操作超时"
-check_has "已降级为文字问答" "$CUR_OUT" "已自动切换为文字问答模式"
+check_has "已降级为文字问答" "$CUR_OUT" "已改用文字问答"
 check_has "降级后继续执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
+
+echo "== 15) 编号菜单 --ui=menu：输入数字即可选择（不依赖方向键） =="
+CUR_OUT="$WORK/menu.out"
+rc="$(printf '4 5\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
+check "菜单模式退出码" "0" "$rc"
+check_has "列出了编号菜单" "$CUR_OUT" "选择要执行的步骤"
+check_has "说明可以用编号多选" "$CUR_OUT" "直接输入编号即可"
+check_has "按编号选中了 fail2ban" "$CUR_OUT" "步骤 1/2：安装配置 fail2ban"
+check_has "按编号选中了 tuning" "$CUR_OUT" "步骤 2/2：时区 / Swap / BBR 网络加速"
+
+CUR_OUT="$WORK/menu-bad.out"
+rc="$(printf 'abc\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
+check "输错编号后退出码" "0" "$rc"
+check_has "提示编号不对" "$CUR_OUT" "编号不对"
+check_has "输入 0 可取消" "$CUR_OUT" "已取消选择"
 
 echo
 if [ "$FAIL" -gt 0 ]; then
