@@ -65,7 +65,7 @@ declare -a RESULT_NAMES=() RESULT_STATES=()
 # 格式: "标识|名称|默认值(y/n)|函数名"
 # 默认值只是"直接回车"时的取值，每一项都会单独询问 Y/N。
 STEPS=(
-  "sysupdate|更新系统软件包与内核/驱动|y|step_sysupdate"
+  "sysupdate|只更新内核 / 驱动 / 固件|y|step_sysupdate"
   "ssh-port|修改 SSH 端口（默认 ${DEFAULT_SSH_PORT}）|y|step_ssh_port"
   "root-passwd|修改 root 密码|y|step_root_password"
   "fail2ban|安装配置 fail2ban（防 SSH 暴力破解）|n|step_fail2ban"
@@ -558,64 +558,107 @@ ssh_restore_backup() {
   return 0
 }
 
-# ============================== 步骤 1：系统更新 ============================
+# ============================== 步骤 1：内核 / 驱动 =========================
+# 只动"内核 + 驱动模块 + 固件 + 微码"相关的包；系统里其它软件包默认完全不碰。
+# 想全量升级（full-upgrade）是单独一次询问，默认「否」。
+KERNEL_PKG_RE='^(linux-(image|modules|modules-extra|firmware|generic|virtual|kvm|headers)|(intel|amd64)-microcode)'
+
+upgradable_kernel_pkgs() { # 当前可升级的内核/驱动/固件包（每行一个）
+  have apt || return 1
+  apt list --upgradable 2>/dev/null | awk -F/ 'NF>1{print $1}' | grep -E "$KERNEL_PKG_RE" | sort -u
+}
+
+installed_kernel_pkgs() { # 已安装的内核/驱动/固件包
+  have dpkg-query || return 1
+  dpkg-query -W -f '${Package} ${Status}\n' 2>/dev/null |
+    awk '$2=="install" && $3=="ok" && $4=="installed"{print $1}' |
+    grep -E "$KERNEL_PKG_RE" | sort -u
+}
+
 step_sysupdate() {
-  local rc=0 virt kpkg="" kpkg_installed=0
+  local rc=0 virt pkgs="" cnt=0 major=0
   virt="$(virt_type)"
-  info "虚拟化类型：$virt"
+  info "虚拟化类型：${virt}"
   case "$virt" in
     openvz|lxc|lxc-libvirt|docker|podman|systemd-nspawn)
-      warn "容器/OpenVZ 环境下内核与驱动由宿主机提供，本步骤只能更新用户态软件包。" ;;
-    kvm|qemu|vmware|microsoft|xen|amazon|virtualbox|bochs|bhyve)
-      info "KVM 类环境：内核与虚拟硬件驱动通过 linux-image / linux-firmware 等包更新。" ;;
+      warn "容器/OpenVZ 环境下内核与驱动由宿主机提供，本机只能更新用户态软件包。" ;;
+    *)
+      info "本步骤只更新内核 / 驱动模块 / 固件相关的包，系统里其它软件包默认不动。" ;;
   esac
 
-  info "1/5 修复可能中断的 dpkg 状态…"
-  run env DEBIAN_FRONTEND=noninteractive dpkg --configure -a || warn "dpkg --configure -a 返回非零（通常无害，继续）"
-  run env DEBIAN_FRONTEND=noninteractive apt-get -y -f install || warn "apt-get -f install 返回非零（继续）"
+  info "1/4 检查软件包状态（有没有装到一半中断的）…"
+  if dpkg --audit 2>/dev/null | grep -q .; then
+    warn "检测到未完成的软件包安装，先修复："
+    run env DEBIAN_FRONTEND=noninteractive dpkg --configure -a || warn "dpkg --configure -a 返回非零（继续）"
+    run env DEBIAN_FRONTEND=noninteractive apt-get -y -f install || warn "apt-get -f install 返回非零（继续）"
+  else
+    ok "软件包状态正常，无需修复。"
+  fi
 
-  info "2/5 更新软件源索引（apt update）…"
+  info "2/4 刷新软件源索引（apt update：只更新索引，不动任何软件）…"
   if ! run env DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3; then
     err "apt update 失败：请检查网络、软件源或磁盘空间"
     return 1
   fi
 
-  info "3/5 升级已安装的软件包 / 内核 / 驱动（apt full-upgrade）…"
-  run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
-    apt-get -y \
-    -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
-    -o Dpkg::Lock::Timeout=900 \
-    full-upgrade || rc=1
-  if [ "$rc" -ne 0 ]; then
-    warn "升级过程中出现错误，请查看上方输出与日志：${LOG_FILE:-未启用}"
+  info "3/4 只升级内核 / 驱动 / 固件…"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "本机已安装的内核/驱动相关包："
+    installed_kernel_pkgs 2>/dev/null | sed 's/^/    /' || true
   fi
-
-  info "4/5 内核元包与固件包（可选）…"
-  case "${OS_ID:-}" in
-    debian|raspbian|devuan)
-      if dpkg -l 2>/dev/null | grep -Eq '^ii[[:space:]]+linux-image-(amd64|arm64|cloud-amd64|armmp)'; then kpkg_installed=1; fi
-      kpkg="linux-image-amd64" ;;
-    *)
-      if dpkg -l 2>/dev/null | grep -Eq '^ii[[:space:]]+linux-(generic|image-generic|virtual)'; then kpkg_installed=1; fi
-      kpkg="linux-generic" ;;
-  esac
-  if is_container; then
-    info "容器环境，跳过固件/内核包。"
+  if have apt; then
+    pkgs="$(upgradable_kernel_pkgs)"
   else
-    if [ "$kpkg_installed" -eq 1 ]; then
-      info "已安装内核元包（$kpkg 系列），后续内核更新会自动跟随。"
-    elif ask_yn "未检测到内核元包（$kpkg），是否安装它以便以后自动跟随内核/驱动更新？" n; then
-      run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$kpkg" || warn "内核元包安装失败（精简系统/云内核镜像可能没有该包）"
-    fi
-    if ask_yn "是否安装/更新 linux-firmware 固件包？（VPS 一般用不到，体积约数百 MB）" n; then
-      run env DEBIAN_FRONTEND=noninteractive apt-get -y install linux-firmware || warn "linux-firmware 安装失败（部分软件源没有该包）"
+    warn "未找到 apt 命令，改为直接尝试升级已安装的内核/驱动包"
+    pkgs="$(installed_kernel_pkgs)"
+  fi
+
+  if [ -z "$pkgs" ]; then
+    ok "内核 / 驱动 / 固件已经是最新，无需升级。"
+  else
+    cnt="$(printf '%s\n' "$pkgs" | wc -l | tr -d ' ')"
+    info "发现 ${cnt} 个可升级的包："
+    printf '%s\n' "$pkgs" | sed 's/^/    /'
+    if ask_yn "是否升级上面这些内核/驱动/固件包？" y; then
+      # shellcheck disable=SC2086
+      if run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+        apt-get -y install --only-upgrade $pkgs \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+        -o Dpkg::Lock::Timeout=900; then
+        ok "内核 / 驱动 / 固件升级完成"
+      else
+        warn "升级过程中出现错误，请查看上方输出与日志：${LOG_FILE:-未启用}"
+        rc=1
+      fi
+    else
+      info "已跳过内核/驱动升级。"
     fi
   fi
 
-  info "5/5 清理…"
-  if ask_yn "是否清理不再需要的依赖包（apt autoremove --purge）？" y; then
+  info "4/4 可选项（下面几项默认都不做）…"
+  if ask_yn "是否顺便升级系统里【其它所有】软件包（apt full-upgrade）？" n; then
+    major=1
+    run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+      apt-get -y \
+      -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+      -o Dpkg::Lock::Timeout=900 \
+      full-upgrade || { warn "全量升级出现错误，请查看上方输出"; rc=1; }
+  else
+    info "保持不动：本次不升级其它软件包。"
+  fi
+
+  if ! is_container && ! dpkg -s linux-firmware >/dev/null 2>&1; then
+    if ask_yn "本机没装 linux-firmware 固件包，是否安装？（VPS 一般用不到，体积数百 MB）" n; then
+      run env DEBIAN_FRONTEND=noninteractive apt-get -y install linux-firmware || warn "安装失败（软件源里可能没有该包）"
+    fi
+  fi
+
+  if ask_yn "是否清理不再需要的依赖包（apt autoremove --purge）？" n; then
     run env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove --purge || warn "autoremove 返回非零"
-    run env DEBIAN_FRONTEND=noninteractive apt-get -y autoclean || true
+  fi
+
+  if [ "$major" -eq 0 ] && ! installed_kernel_pkgs 2>/dev/null | grep -qE '^linux-(generic|image-generic|virtual|image-virtual|image-amd64|image-cloud-amd64|image-arm64|image-rt-amd64)'; then
+    info "提示：本机没有内核元包（如 linux-image-generic），内核不会自动跟随更新；需要的话手动 apt install 即可。"
   fi
 
   if [ -f /var/run/reboot-required ]; then
@@ -625,7 +668,7 @@ step_sysupdate() {
       info "触发重启的包：$(tr '\n' ' ' </var/run/reboot-required.pkgs)"
     fi
   fi
-  ok "系统更新完成（当前内核：$(uname -r)）"
+  ok "内核 / 驱动更新流程结束（当前运行内核：$(uname -r)）"
   return "$rc"
 }
 
@@ -1393,7 +1436,7 @@ vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
   -V, --version        显示版本号
 
 步骤标识:
-  sysupdate     更新系统软件包与内核/驱动
+  sysupdate     只更新内核 / 驱动 / 固件（其它软件包默认不动）
   ssh-port      修改 SSH 端口（默认 52052）
   root-passwd   修改 root 密码
   fail2ban      安装配置 fail2ban

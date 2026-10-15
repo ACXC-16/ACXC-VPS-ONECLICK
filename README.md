@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh 
 
 | 步骤标识 | 做什么 | 默认值 |
 | --- | --- | --- |
-| `sysupdate` | 修复 dpkg 状态 → `apt update` → `apt full-upgrade`（内核 / 驱动 / 固件）→ 清理无用包 → 提示是否需要重启 | **Y** |
+| `sysupdate` | **只更新内核 / 驱动 / 固件**（`linux-image`、`linux-modules`、`linux-firmware`、`*-microcode`），会先把可升级清单列出来让你确认；**系统里其它软件包默认一个字都不动** | **Y** |
 | `ssh-port` | 修改 SSH 端口（默认 **52052**，可自定义），改前备份、改后校验，失败自动回滚 | **Y** |
 | `root-passwd` | 修改 root 密码（手动输入或自动生成随机强密码），并检查是否能密码登录 | **Y** |
 | `fail2ban` | 安装配置 fail2ban 防 SSH 暴力破解（自动跟随你设置的 SSH 端口） | N |
@@ -89,18 +89,21 @@ sudo bash init.sh --yes
 
 ## 各步骤细节
 
-### 1. `sysupdate`：把驱动 / 内核更新一遍
+### 1. `sysupdate`：只更新内核 / 驱动 / 固件
 
-VPS 上说的「驱动」其实就是**内核 + 固件包**（GPU 驱动、CPU 微码在虚拟机上没有意义，由宿主机负责）。脚本做的事情：
+VPS 上说的「驱动」就是**内核 + 内核模块 + 固件包**（GPU 驱动、CPU 微码在虚拟机上由宿主机负责）。这一步**不会顺手升级你系统里的其它软件**：
 
-1. `dpkg --configure -a` + `apt-get -f install` 修复可能中断的安装状态；
-2. `apt-get update`（带 3 次重试）；
-3. `apt-get full-upgrade`，并强制保留你现有的配置文件（`--force-confdef --force-confold`），同时关闭 needrestart 的交互弹窗；
-4. 可选：安装内核元包（`linux-generic` / `linux-image-amd64`）以便以后自动跟随内核更新；可选安装 `linux-firmware`；
-5. 可选 `autoremove --purge` 清理；
-6. 检测 `/var/run/reboot-required`，如果内核更新了会提示你重启（默认不自动重启）。
+1. 先检查软件包状态（`dpkg --audit`），只有真的装到一半中断了才会去修复；
+2. `apt-get update` —— 只刷新软件源索引，不动任何软件；
+3. 从 `apt list --upgradable` 里筛出**内核/驱动/固件相关**的包，把清单打印出来，然后问你 `是否升级上面这些包？[Y/n]`：
+   - 命中的包名规则：`linux-image*`、`linux-modules*`、`linux-modules-extra*`、`linux-firmware*`、`linux-generic`/`linux-virtual`/`linux-kvm`、`intel-microcode`/`amd64-microcode`（要加别的自行改脚本里的 `KERNEL_PKG_RE`）；
+   - 用 `apt-get install --only-upgrade`，只升级、绝不新装无关包；没有可升级的会直接告诉你「已经是最新」；
+4. 然后是三个**默认「否」**的可选项：是否顺便把系统里**其它所有**软件包也升级（`apt full-upgrade`）、是否安装 `linux-firmware`、是否 `autoremove` 清理；
+5. 检测 `/var/run/reboot-required`，如果内核更新了会提示你重启（默认不自动重启）。
 
-容器 / OpenVZ 环境会明确告诉你：内核由宿主机管理，这一步只能更新用户态软件包。
+也就是说：**你按默认值一路回车，它只会更新驱动/内核，不会碰 nginx、MySQL、Docker 这些业务软件。**
+
+容器 / OpenVZ 环境会明确告知：内核由宿主机提供，本机只能更新用户态软件包。
 
 ### 2. `ssh-port`：修改 SSH 端口（默认 52052）
 
@@ -312,6 +315,9 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 
 **Q：能重复运行吗？**
 可以。所有步骤都是幂等的设计：SSH 受管配置会保留上次设置、fail2ban 配置覆盖写入、Swap 已存在就跳过、已安装的包 apt 会直接跳过。
+
+**Q：会不会把我系统里其它软件（nginx/MySQL/Docker…）也升级了？**
+不会。第一步 `sysupdate` 只升级内核 / 驱动 / 固件相关的包，而且会把清单列给你确认；全量升级是一个单独的询问，**默认「否」**，清理也是默认「否」。只想更新驱动的话，默认值一路回车即可。
 
 **Q：脚本会不会改我的软件源？**
 不会，脚本只使用系统现有的 apt 源。
