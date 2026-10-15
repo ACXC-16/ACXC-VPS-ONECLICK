@@ -209,8 +209,12 @@ answer="$(sed -n "${idx}p" "$ANSWERS")"
 
 type=""
 title=""
+text=""
 prev=""
 for a in "$@"; do
+  case "$prev" in
+    --yesno|--msgbox|--checklist|--inputbox|--passwordbox) text="$a" ;;
+  esac
   case "$a" in
     --yesno) type=yesno ;;
     --inputbox|--passwordbox) type=input ;;
@@ -221,9 +225,9 @@ for a in "$@"; do
   prev="$a"
 done
 
-# 记一笔"弹过什么框"，便于断言
+# 记一笔"弹过什么框、写了什么"，便于断言
 if [ -n "${MOCK_LOG:-}" ]; then
-  printf '%s|%s\n' "$type" "$title" >>"$MOCK_LOG"
+  printf '%s|%s|%s\n' "$type" "$title" "$text" >>"$MOCK_LOG"
 fi
 
 case "$type" in
@@ -271,6 +275,8 @@ CUR_OUT="$WORK/tui-a.out"
 rc="$(tui_case "$CUR_OUT" "$WORK/ans-a" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
 check "勾选流程退出码" "0" "$rc"
 check_has "弹出的第一个框是步骤勾选清单" "$CUR_OUT.log" "checklist|vps-init · 选择要执行的步骤"
+check_has "勾选界面写明了按键方式" "$CUR_OUT.log" "空格 = 勾选/取消"
+check_has "是否框写明了按键方式" "$CUR_OUT.log" "Tab 或 ← → 切换按钮"
 check_has "只执行勾选的步骤" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
 check_has "全量升级仍默认否" "$CUR_OUT" "保持不动：本次不升级其它软件包"
 
@@ -317,8 +323,26 @@ printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
     bash "$WORK/init-fake.sh" --force --dry-run --ui=whiptail >"$CUR_OUT" 2>&1
 rc=$?
 check "降级后仍然跑完" "0" "$rc"
-check_has "提示已降级" "$CUR_OUT" "图形界面出错，已自动切换为文字问答模式"
+check_has "提示已降级" "$CUR_OUT" "已自动切换为文字问答模式"
 check_has "降级后仍能正常执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
+
+echo "== 14) 图形界面等不到操作（超时）也要自动降级，不能卡死 =="
+mkdir -p "$WORK/bin-tmo"
+cat >"$WORK/bin-tmo/whiptail" <<'MOCK'
+#!/usr/bin/env bash
+# 模拟"等不到按键被 timeout 杀掉"（真实情况是 timeout 命令返回 124）
+exit 124
+MOCK
+chmod +x "$WORK/bin-tmo/whiptail"
+CUR_OUT="$WORK/tui-tmo.out"
+printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
+  PATH="$WORK/bin-tmo:$PATH" VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
+    bash "$WORK/init-fake.sh" --force --dry-run --ui=whiptail >"$CUR_OUT" 2>&1
+rc=$?
+check "超时后仍然跑完" "0" "$rc"
+check_has "提示是等待超时" "$CUR_OUT" "等待操作超时"
+check_has "已降级为文字问答" "$CUR_OUT" "已自动切换为文字问答模式"
+check_has "降级后继续执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
 
 echo
 if [ "$FAIL" -gt 0 ]; then

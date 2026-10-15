@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.1
+#  版本: 1.0.2
 #  仓库: https://github.com/qinjing-arch/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="vps-init"
-VERSION="1.0.1"
+VERSION="1.0.2"
 REPO_SLUG="qinjing-arch/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
@@ -60,6 +60,9 @@ NEW_ROOT_PASSWORD=""
 UI_MODE="${VPS_INIT_UI:-auto}"
 UI_BACKEND="plain"
 UI_LOCALE="C.UTF-8"
+# 图形界面等待超时（秒）：等不到操作就自动切回文字问答，绝不把脚本卡死
+UI_TIMEOUT="${VPS_INIT_UI_TIMEOUT:-300}"
+UI_SELFTEST_TIMEOUT=25
 UI_LINES=24
 UI_COLS=80
 UI_W=76
@@ -179,36 +182,60 @@ ui_init_size() {
   fi
   case "$UI_LINES" in ''|*[!0-9]*) UI_LINES=24 ;; esac
   case "$UI_COLS" in ''|*[!0-9]*) UI_COLS=80 ;; esac
-  UI_W=$((UI_COLS - 4))
-  [ "$UI_W" -gt 78 ] && UI_W=78
+  # 留足边距，保证方框（尤其底部的按钮）一定在屏幕里
+  UI_W=$((UI_COLS - 12))
+  [ "$UI_W" -gt 72 ] && UI_W=72
   [ "$UI_W" -lt 40 ] && UI_W=40
-  UI_H=$((UI_LINES - 10))
-  [ "$UI_H" -gt 16 ] && UI_H=16
-  [ "$UI_H" -lt 6 ] && UI_H=6
+  UI_H=$((UI_LINES - 6))
+  [ "$UI_H" -gt 14 ] && UI_H=14
+  [ "$UI_H" -lt 8 ] && UI_H=8
   return 0
 }
 
-# 图形界面出错 → 永久退回文字问答，绝不静默丢答案或退出
-ui_fallback() {
+# 只有 GNU coreutils 的 timeout 才能这么用（Git Bash / Windows 自带的同名命令不行）
+have_gnu_timeout() {
+  have timeout || return 1
+  timeout --version 2>/dev/null | grep -qi coreutils
+}
+
+# 图形界面出错/超时 → 永久退回文字问答，绝不静默丢答案或卡死
+ui_fallback() { # $1=原因（可选）
   if [ "$UI_BACKEND" = "whiptail" ]; then
-    warn "图形界面出错，已自动切换为文字问答模式（后面的问题都用文字）"
-    _log_raw UI "图形界面出错，降级为 plain"
+    if [ -n "${1:-}" ]; then
+      warn "图形界面不可用（$1），已自动切换为文字问答模式"
+    else
+      warn "图形界面出错，已自动切换为文字问答模式（后面的问题都用文字）"
+    fi
+    _log_raw UI "图形界面降级为 plain：${1:-出错}"
     UI_BACKEND="plain"
   fi
   return 0
 }
 
-# 调用 whiptail：结果放 REPLY，退出码原样返回
+# 调用 whiptail：结果放 REPLY，退出码原样返回（124 = 等待超时）
 _ui_run() {
-  local rc=0 out=""
+  local rc=0 out="" tmo="$UI_TIMEOUT"
   if [ "$TTY_OK" -eq 1 ]; then
-    out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
+    if have_gnu_timeout; then
+      out="$(env LC_ALL="$UI_LOCALE" timeout "$tmo" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
+    else
+      out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
+    fi
   else
     # 没有终端时不做 fd 交换（测试用 mock whiptail 走这条分支）
     out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 2>&1 1>/dev/null)" || rc=$?
   fi
   REPLY="$out"
   return "$rc"
+}
+
+# 把 whiptail 的退出码翻译成人类能看懂的处理方式
+ui_rc_reason() {
+  case "${1:-0}" in
+    124) printf '等待操作超时' ;;
+    255) printf '你按了 ESC / 取消' ;;
+    *) printf '退出码 %s' "${1:-?}" ;;
+  esac
 }
 
 # 提示框：图形模式弹窗，文字模式直接打印
@@ -221,14 +248,17 @@ ui_msg() { # $1=标题 $2=内容
   return 0
 }
 
-ui_selftest() { # 返回 0 = 图形界面可用
-  local rc=0
+ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动键也不会卡住
+  local rc=0 saved="$UI_TIMEOUT"
+  UI_TIMEOUT="$UI_SELFTEST_TIMEOUT"
   _ui_run --title "vps-init 界面自检" \
-    --yesno "接下来会用这样的方框菜单来操作。\n\n你能正常看到这个方框吗？\n\n  <Yes>  用图形界面\n  <No>   改用文字问答" \
-    13 68 || rc=$?
+    --yesno "接下来会用这样的方框来操作。\n\n操作方式：用 Tab 或 ← → 切换按钮，回车确认。\n（直接敲 y / n 没用，方框里不吃字母键）\n\n  <Yes>  用图形界面\n  <No>   改用文字问答（老式 [Y/n]）\n\n如果按键没反应，什么都不用做，${UI_SELFTEST_TIMEOUT} 秒后会自动切回文字问答。" \
+    17 70 || rc=$?
+  UI_TIMEOUT="$saved"
   case "$rc" in
     0) return 0 ;;
-    *) return 1 ;;
+    1) return 1 ;;
+    *) ui_fallback "$(ui_rc_reason "$rc")"; return 1 ;;
   esac
 }
 
@@ -279,11 +309,17 @@ ui_detect() {
       return 0
     fi
   fi
+
+  # 先把操作方式讲清楚，免得卡在方框里不知道怎么按键
+  info "图形界面的操作方式：方向键移动、空格勾选、Tab 或 ← → 切换按钮、回车确认。"
+  info "方框里直接敲 y / n 是没用的；如果按键完全没反应，什么都不用做，${UI_SELFTEST_TIMEOUT} 秒后会自动切回文字问答。"
+  printf '\n'
+
   if ui_selftest; then
     UI_BACKEND="whiptail"
     _log_raw UI "使用图形界面（whiptail）"
   else
-    info "改用文字问答模式（随时可以用 --ui=whiptail 再试）"
+    info "已改用文字问答模式（想再试图形界面：加 --ui=whiptail；想强制文字：加 --text）"
   fi
   return 0
 }
@@ -316,7 +352,7 @@ _prompt_secret() { # $1=提示语 → REPLY（不回显）
     case "$rc" in
       0) return 0 ;;
       1|255) return 1 ;;
-      *) ui_fallback ;;
+      *) ui_fallback "$(ui_rc_reason "$rc")" ;;
     esac
   fi
   if [ "$TTY_OK" -eq 1 ]; then
@@ -347,11 +383,13 @@ ask_yn() {
     local rc=0 extra=""
     [ "$def" = n ] && extra="--defaultno"
     # shellcheck disable=SC2086
-    _ui_run --title "vps-init" $extra --yesno "$(printf '%b' "$q")" "$UI_H" "$UI_W" || rc=$?
+    _ui_run --title "vps-init" $extra --yesno "$(printf '%b' "$q")
+
+（Tab 或 ← → 切换按钮，回车确认）" "$UI_H" "$UI_W" || rc=$?
     case "$rc" in
       0) _log_raw ANSWER "$q -> Y"; return 0 ;;
       1) _log_raw ANSWER "$q -> N"; return 1 ;;
-      *) ui_fallback ;;
+      *) ui_fallback "$(ui_rc_reason "$rc")" ;;
     esac
   fi
   hint="[y/N]"; [ "$def" = y ] && hint="[Y/n]"
@@ -396,7 +434,7 @@ ask_value() {
         warn "已取消输入"
         return 1
       fi
-      ui_fallback
+      ui_fallback "$(ui_rc_reason "$rc")"
       break
     done
   fi
@@ -1413,8 +1451,10 @@ build_plan_tui() {
   local -a args=()
   local h=$(( ${#STEPS[@]} + 9 ))
   local listh=$(( ${#STEPS[@]} + 1 ))
-  [ "$h" -gt 22 ] && h=22
-  [ "$listh" -gt 14 ] && listh=14
+  [ "$h" -gt $((UI_LINES - 2)) ] && h=$((UI_LINES - 2))
+  [ "$h" -lt 10 ] && h=10
+  [ "$listh" -gt $((h - 5)) ] && listh=$((h - 5))
+  [ "$listh" -lt 1 ] && listh=1
 
   for entry in "${STEPS[@]}"; do
     IFS='|' read -r slug title def fn <<<"$entry"
@@ -1433,8 +1473,8 @@ build_plan_tui() {
     exit 0
   fi
   if [ "$rc" -ne 0 ]; then
-    # 界面本身出问题：降级成文字问答，不静默退出
-    ui_fallback
+    # 界面本身出问题（含等待超时）：降级成文字问答，不静默退出
+    ui_fallback "$(ui_rc_reason "$rc")"
     return 1
   fi
   if [ -z "$REPLY" ]; then
