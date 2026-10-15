@@ -424,6 +424,14 @@ rc="$(printf '3\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dr
 check "退出码" "0" "$rc"
 check_hasnt "选 0 不打印多余提示" "$CUR_OUT" "已返回"
 
+echo "== 26) 无人值守：有可升级包时也不提问（--yes）=="
+CUR_OUT="$WORK/yes-upgrade.out"
+rc="$(printf '' | PATH="$KSTUB:$PATH" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
+check "无人值守退出码（不该卡在提问）" "0" "$rc"
+check_has "直接升级驱动组" "$CUR_OUT" "--only-upgrade intel-microcode"
+check_has "直接升级内核组" "$CUR_OUT" "--only-upgrade linux-image-6.8.0-147-generic"
+check_hasnt "没有等待输入" "$CUR_OUT" "读取输入失败"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="

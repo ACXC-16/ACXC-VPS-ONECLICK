@@ -743,7 +743,7 @@ step_sysupdate() {
     g_label+=("$(printf '%s%*s' "$p" "$gp" "")")
   done
 
-  while :; do
+  while [ "$ASSUME_YES" -eq 0 ]; do
     printf '\n%s\n' "  ${C_BLD}可升级的项目：${C_RST}"
     printf '  %s1)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[0]}" "${driver:-（无）}"
     printf '  %s2)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[1]}" "${firmware:-（无）}"
@@ -780,6 +780,7 @@ step_sysupdate() {
     fi
     break
   done
+  [ "$ASSUME_YES" -eq 1 ] && picked="1 2 3"
 
   # shellcheck disable=SC2086
   for tok in $(printf '%s' "$picked" | tr ' ' '\n'); do
@@ -1484,8 +1485,16 @@ step_extras() {
     printf '\n'
     info "多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部"
 
-    if ! read_line "请选择"; then return 1; fi
-    raw="${REPLY}"
+    if [ "$ASSUME_YES" -eq 1 ]; then
+      PLAN_TOOLS=()
+      for i in "${!g_pkgs[@]}"; do
+        [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
+      done
+      raw=""
+    else
+      if ! read_line "请选择"; then return 1; fi
+      raw="${REPLY}"
+    fi
 
     if [ -z "$(trim "$raw")" ]; then
       PLAN_TOOLS=()
