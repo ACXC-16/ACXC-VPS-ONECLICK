@@ -10,6 +10,10 @@
 #    或
 #      sudo bash <(curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh)
 #
+#  测试用环境变量（普通用户不用管，CI / 本地测试才会用到）:
+#    VPS_INIT_ALLOW_NONROOT=1  配合 --dry-run 允许非 root 运行
+#    VPS_INIT_FORCE_STDIN=1    强制从 stdin 读取回答（测试脚本喂答案用）
+#
 #  设计原则：
 #    * 每一步执行前都单独询问 Y/N，默认值写在 STEPS 表里
 #    * 任何一步失败都不会中断整个脚本，最后统一汇总
@@ -140,6 +144,8 @@ init_log() {
 # （容器、面板、无控制终端的场景下 /dev/tty 存在但打不开，此时要退回 stdin）。
 detect_tty() {
   TTY_OK=0
+  # 测试时可以用 VPS_INIT_FORCE_STDIN=1 强制从 stdin 读答案
+  if [ "${VPS_INIT_FORCE_STDIN:-0}" = "1" ]; then return 0; fi
   if ( : </dev/tty ) 2>/dev/null && ( : >/dev/tty ) 2>/dev/null; then
     TTY_OK=1
   fi
@@ -283,11 +289,12 @@ sshd_bin() {
 }
 
 # 校验 sshd 配置；容器里缺少主机密钥不算错
+# 显式指定 -f /etc/ssh/sshd_config：与默认行为一致，同时便于测试脚本替换路径
 sshd_test() {
   local b out rc=0
   b="$(sshd_bin)"
   [ -n "$b" ] || return 0
-  out="$("$b" -t 2>&1)" || rc=$?
+  out="$("$b" -t -f /etc/ssh/sshd_config 2>&1)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     case "$out" in
       *"no hostkeys available"*|*"Missing privilege separation directory"*|*"No such file or directory"*)
@@ -303,7 +310,7 @@ sshd_effective() { # 输出 sshd -T 的结果（失败则为空）
   local b
   b="$(sshd_bin)"
   [ -n "$b" ] || return 1
-  "$b" -T 2>/dev/null
+  "$b" -T -f /etc/ssh/sshd_config 2>/dev/null
 }
 
 current_ssh_ports() { # 输出当前生效的端口（空格分隔，无首尾空白）
