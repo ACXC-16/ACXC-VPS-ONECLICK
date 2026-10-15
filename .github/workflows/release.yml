@@ -1,0 +1,43 @@
+name: Release
+
+# 打 tag（形如 v1.0.0）时自动发布：先跑测试，再创建 Release 并把脚本作为附件传上去。
+# 发布后稳定下载地址（永远指向最新 Release）：
+#   https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 测试并发布
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v5
+
+      - name: 发布前必须通过测试（不然不发）
+        run: |
+          bash -n init.sh
+          bash -n tests/smoke.sh
+          shellcheck --severity=warning init.sh tests/smoke.sh
+          bash tests/smoke.sh
+
+      - name: 准备发布文件（额外留一份带版本号的副本）
+        run: |
+          cp init.sh "vps-init-${GITHUB_REF_NAME}.sh"
+          sha256sum init.sh "vps-init-${GITHUB_REF_NAME}.sh" | tee SHA256SUMS.txt
+
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            init.sh \
+            "vps-init-${GITHUB_REF_NAME}.sh" \
+            SHA256SUMS.txt \
+            --title "vps-init ${GITHUB_REF_NAME}" \
+            --generate-notes
