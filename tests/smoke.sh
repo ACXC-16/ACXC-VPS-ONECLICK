@@ -349,9 +349,30 @@ CUR_OUT="$WORK/menu.out"
 rc="$(printf '4 5\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
 check "菜单模式退出码" "0" "$rc"
 check_has "列出了编号菜单" "$CUR_OUT" "选择要执行的步骤"
-check_has "说明可以用编号多选" "$CUR_OUT" "直接输入编号即可"
+check_has "说明可以用编号多选" "$CUR_OUT" "直接输入数字"
 check_has "按编号选中了 fail2ban" "$CUR_OUT" "步骤 1/2：安装配置 fail2ban"
 check_has "按编号选中了 tuning" "$CUR_OUT" "步骤 2/2：时区 / Swap / BBR 网络加速"
+
+# 方向键（ESC 序列）不应该被当成编号，但也不能卡住
+CUR_OUT="$WORK/menu-esc.out"
+rc="$(printf '\033[A\033[B\n1\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
+check "带方向键输入后仍能继续" "0" "$rc"
+check_has "提示没认出数字" "$CUR_OUT" "没认出数字来"
+check_has "随后输入 1 正常执行" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
+
+# 全角数字也要能识别
+CUR_OUT="$WORK/menu-fw.out"
+rc="$(printf '１\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
+check "全角数字输入退出码" "0" "$rc"
+check_has "全角数字 １ 也能识别" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
+
+# 记住界面选择：下次直接用编号菜单，不再弹方框
+printf 'menu\n' >"$WORK/uipref"
+CUR_OUT="$WORK/menu-pref.out"
+rc="$(printf '0\n' | VPS_INIT_UI_PREF="$WORK/uipref" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "沿用记住的界面" "0" "$rc"
+check_has "提示沿用上次选择" "$CUR_OUT" "沿用上次的界面选择"
+check_has "直接进入编号菜单" "$CUR_OUT" "选择要执行的步骤"
 
 CUR_OUT="$WORK/menu-bad.out"
 rc="$(printf 'abc\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"

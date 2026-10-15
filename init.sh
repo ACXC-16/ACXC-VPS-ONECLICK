@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.3
+#  版本: 1.0.4
 #  仓库: https://github.com/qinjing-arch/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="vps-init"
-VERSION="1.0.3"
+VERSION="1.0.4"
 REPO_SLUG="qinjing-arch/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
@@ -63,6 +63,16 @@ UI_LOCALE="C.UTF-8"
 # 图形界面等待超时（秒）：等不到操作就自动切回文字菜单，绝不把脚本卡死
 UI_TIMEOUT="${VPS_INIT_UI_TIMEOUT:-300}"
 UI_SELFTEST_TIMEOUT="${VPS_INIT_UI_SELFTEST_TIMEOUT:-10}"
+# 记住上次用的界面（写了这个文件后，下次直接用同一种，不再弹方框）
+UI_PREF_FILE="${VPS_INIT_UI_PREF:-}"
+if [ -z "$UI_PREF_FILE" ]; then
+  if [ "$(id -u 2>/dev/null)" = "0" ]; then
+    UI_PREF_FILE="/root/.vps-init-ui"
+  else
+    UI_PREF_FILE="${HOME:-/tmp}/.vps-init-ui"
+  fi
+fi
+UI_EXPLICIT=0
 UI_LINES=24
 UI_COLS=80
 UI_W=76
@@ -270,9 +280,44 @@ ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动
   esac
 }
 
+# 把最终选择记下来（只在自动模式下记，且只在真实终端里记）
+ui_save_pref() { # $1=whiptail|menu|plain
+  [ -n "$UI_PREF_FILE" ] || return 0
+  [ "$UI_EXPLICIT" -eq 0 ] || return 0
+  if [ "$TTY_OK" -ne 1 ] && [ -z "${VPS_INIT_UI_PREF:-}" ]; then return 0; fi
+  case "${1:-}" in
+    whiptail|menu|plain) ;;
+    *) return 0 ;;
+  esac
+  if printf '%s\n' "$1" >"$UI_PREF_FILE" 2>/dev/null; then
+    _log_raw UI "记住界面选择：$1（$UI_PREF_FILE）"
+  fi
+  return 0
+}
+
 # 决定用哪种界面：auto = 能用图形界面就用，否则用编号菜单，兜底文字问答
 ui_detect() {
+  ui_detect_impl
+  ui_save_pref "$UI_BACKEND"
+  return 0
+}
+
+ui_detect_impl() {
   UI_BACKEND="plain"
+  [ "$UI_MODE" = "auto" ] || UI_EXPLICIT=1
+
+  # 上次用过的界面记在 UI_PREF_FILE 里，免得每次都要重新试一遍方框
+  if [ "$UI_EXPLICIT" -eq 0 ] && [ -r "$UI_PREF_FILE" ]; then
+    local saved=""
+    saved="$(trim "$(head -n 1 "$UI_PREF_FILE" 2>/dev/null)")"
+    case "$saved" in
+      whiptail|menu|plain)
+        UI_MODE="$saved"
+        info "沿用上次的界面选择：${saved}（想换一种：--ui=whiptail / --menu / --text）"
+        ;;
+    esac
+  fi
+
   [ "$UI_MODE" = "plain" ] && return 0
 
   # 有终端才有"菜单"这一档（显式 --ui=menu 时即使没有终端也照做，便于测试）
@@ -1513,9 +1558,24 @@ build_plan_tui() {
   return 0
 }
 
+# 清洗菜单输入：去掉方向键等转义序列/控制字符，全角数字转半角，各种分隔符转空格
+menu_clean_input() { # $1=原始输入 → 清洗后的字符串
+  local s="${1-}" i
+  # 方向键 / Home / PageUp 等在普通输入下会以 ESC 序列的形式进来
+  s="$(printf '%s' "$s" | sed -e 's/\x1b\[[0-9;?]*[A-Za-z~]//g' -e 's/\^\[\[[0-9;?]*[A-Za-z~]//g')"
+  s="$(printf '%s' "$s" | tr -d '\000-\037\177')"
+  local -a fw=(０ １ ２ ３ ４ ５ ６ ７ ８ ９)
+  for i in 0 1 2 3 4 5 6 7 8 9; do
+    s="${s//${fw[$i]}/$i}"
+  done
+  s="${s//，/ }"; s="${s//、/ }"; s="${s//；/ }"; s="${s//;// }"
+  s="${s//,/ }"; s="${s//）/ }"; s="${s//（/ }"; s="${s//#/ }"; s="${s//./ }"
+  printf '%s' "$s"
+}
+
 # 纯文字编号菜单：不依赖方向键 / Tab / terminfo，任何终端都能用（输入编号即可）
 build_plan_menu() {
-  local entry slug title def fn i=0 line="" tok="" ok=1
+  local entry slug title def fn i=0 raw="" line="" tok="" ok=1
   local -a t_slug=() t_title=() t_def=()
 
   printf '\n%s\n' "${C_BLD}${C_CYN}================== 选择要执行的步骤 ==================${C_RST}"
@@ -1530,20 +1590,30 @@ build_plan_menu() {
     fi
   done
   printf '%s\n' "${C_BLD}=====================================================${C_RST}"
-  info "直接输入编号即可：多选用空格或逗号（例：1 3）；回车=[默认执行]的那些；a=全部；0=退出"
+  info "在这个提示符后面【直接输入数字】再回车：多选用空格或逗号（例：1 3）；回车=[默认执行]的那些；a=全部；0=退出"
+  info "注意：这里不要按方向键 —— 方向键会变成 ^[[A 这类乱码，脚本认不出"
 
   while :; do
-    if ! _prompt_line "  请输入编号" ""; then
+    if ! _prompt_line "  请输入编号（例如 1 或 1 3）" ""; then
       warn "读取输入失败"
       return 1
     fi
-    line="$(trim "${REPLY}")"
+    raw="$REPLY"
+    line="$(trim "$(menu_clean_input "$raw")")"
+
+    # 直接回车 = 执行标了 [默认执行] 的项
+    if [ -z "$line" ] && [ -z "$(trim "$raw")" ]; then
+      for i in "${!t_slug[@]}"; do
+        if [ "${t_def[$i]}" = y ]; then plan_add "${t_slug[$i]}"; fi
+      done
+      return 0
+    fi
+    # 敲了东西但清洗后啥也不剩（多半是按了方向键）
+    if [ -z "$line" ]; then
+      warn "没认出数字来（大概是按了方向键）：请直接用键盘输入编号，例如 1 或 1 3"
+      continue
+    fi
     case "$line" in
-      '')
-        for i in "${!t_slug[@]}"; do
-          if [ "${t_def[$i]}" = y ]; then plan_add "${t_slug[$i]}"; fi
-        done
-        return 0 ;;
       0|q|Q)
         warn "已取消选择，未做任何修改。"
         exit 0 ;;
@@ -1556,7 +1626,7 @@ build_plan_menu() {
     PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
     ok=1
     # shellcheck disable=SC2046,SC2086
-    for tok in $(printf '%s' "$line" | tr ',，、' '   '); do
+    for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
       case "$tok" in
         ''|*[!0-9]*) ok=0; break ;;
       esac
