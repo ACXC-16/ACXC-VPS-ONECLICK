@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.4
+#  版本: 1.0.5
 #  仓库: https://github.com/qinjing-arch/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="vps-init"
-VERSION="1.0.4"
+VERSION="1.0.5"
 REPO_SLUG="qinjing-arch/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
@@ -280,15 +280,15 @@ ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动
   esac
 }
 
-# 把最终选择记下来（只在自动模式下记，且只在真实终端里记）
+# 把最终选择记下来（只记非默认的 whiptail/plain；menu 本来就是默认值，不用记）
 ui_save_pref() { # $1=whiptail|menu|plain
   [ -n "$UI_PREF_FILE" ] || return 0
   [ "$UI_EXPLICIT" -eq 0 ] || return 0
-  if [ "$TTY_OK" -ne 1 ] && [ -z "${VPS_INIT_UI_PREF:-}" ]; then return 0; fi
   case "${1:-}" in
-    whiptail|menu|plain) ;;
+    whiptail|plain) ;;
     *) return 0 ;;
   esac
+  if [ "$TTY_OK" -ne 1 ] && [ -z "${VPS_INIT_UI_PREF:-}" ]; then return 0; fi
   if printf '%s\n' "$1" >"$UI_PREF_FILE" 2>/dev/null; then
     _log_raw UI "记住界面选择：$1（$UI_PREF_FILE）"
   fi
@@ -303,47 +303,44 @@ ui_detect() {
 }
 
 ui_detect_impl() {
-  UI_BACKEND="plain"
+  # 默认就是编号菜单：任何终端（含 FinalShell）都能用，不依赖方向键/方框
+  UI_BACKEND="menu"
   [ "$UI_MODE" = "auto" ] || UI_EXPLICIT=1
 
-  # 上次用过的界面记在 UI_PREF_FILE 里，免得每次都要重新试一遍方框
+  # 只有"上次明确选过 whiptail/plain"才覆盖默认值
   if [ "$UI_EXPLICIT" -eq 0 ] && [ -r "$UI_PREF_FILE" ]; then
     local saved=""
     saved="$(trim "$(head -n 1 "$UI_PREF_FILE" 2>/dev/null)")"
     case "$saved" in
-      whiptail|menu|plain)
+      whiptail|plain)
         UI_MODE="$saved"
-        info "沿用上次的界面选择：${saved}（想换一种：--ui=whiptail / --menu / --text）"
+        info "沿用上次的界面选择：${saved}（想换：--ui=whiptail / --menu / --text）"
         ;;
     esac
   fi
 
-  [ "$UI_MODE" = "plain" ] && return 0
+  case "$UI_MODE" in
+    plain) UI_BACKEND="plain"; return 0 ;;
+    menu)  UI_BACKEND="menu";  return 0 ;;
+  esac
 
-  # 有终端才有"菜单"这一档（显式 --ui=menu 时即使没有终端也照做，便于测试）
-  if [ "$TTY_OK" -eq 1 ] || [ "$UI_MODE" = "menu" ]; then UI_BACKEND="menu"; fi
-  [ "$UI_MODE" = "menu" ] && return 0
-
+  # 下面只处理 whiptail（必须是 --ui=whiptail 显式指定，或上次记下的选择）
   if ! have whiptail; then
-    if [ "$UI_MODE" = "whiptail" ] || [ "$UI_MODE" = "auto" ]; then
-      if [ "$TTY_OK" -eq 1 ] && have apt-get; then
-        if ask_yn "图形界面需要 whiptail 组件（很小，几十 KB），是否现在安装？" y; then
-          run env DEBIAN_FRONTEND=noninteractive apt-get -y install whiptail >/dev/null 2>&1 ||
-            warn "whiptail 安装失败"
-        fi
+    if [ "$TTY_OK" -eq 1 ] && have apt-get; then
+      if ask_yn "图形方框需要 whiptail 组件（很小，几十 KB），是否现在安装？" y; then
+        run env DEBIAN_FRONTEND=noninteractive apt-get -y install whiptail >/dev/null 2>&1 ||
+          warn "whiptail 安装失败"
       fi
     fi
     if ! have whiptail; then
-      [ "$UI_MODE" = "whiptail" ] && warn "没有 whiptail，无法使用图形界面"
+      warn "没有 whiptail，无法使用图形方框，改用编号菜单"
       return 0
     fi
   fi
 
   if [ "$TTY_OK" -ne 1 ]; then
-    if [ "$UI_MODE" = "whiptail" ]; then
-      warn "当前没有可用终端，仍按 --ui=whiptail 尝试（显示可能异常）"
-      UI_BACKEND="whiptail"
-    fi
+    warn "当前没有可用终端，仍按 --ui=whiptail 尝试（显示可能异常）"
+    UI_BACKEND="whiptail"
     return 0
   fi
 
@@ -1573,49 +1570,46 @@ menu_clean_input() { # $1=原始输入 → 清洗后的字符串
   printf '%s' "$s"
 }
 
-# 纯文字编号菜单：不依赖方向键 / Tab / terminfo，任何终端都能用（输入编号即可）
+# 编号菜单：一行一项列出来（1、2、3、…），问你要哪些、不要哪些
+# 不依赖方向键 / Tab / terminfo，任何终端（含 FinalShell）都能用
 build_plan_menu() {
   local entry slug title def fn i=0 raw="" line="" tok="" ok=1
   local -a t_slug=() t_title=() t_def=()
 
-  printf '\n%s\n' "${C_BLD}${C_CYN}================== 选择要执行的步骤 ==================${C_RST}"
+  printf '\n%s\n' "${C_BLD}${C_CYN}================ 请选择要执行的步骤 ================${C_RST}"
   for entry in "${STEPS[@]}"; do
     IFS='|' read -r slug title def fn <<<"$entry"
     i=$((i + 1))
     t_slug+=("$slug"); t_title+=("$title"); t_def+=("$def")
-    if [ "$def" = y ]; then
-      printf '  %s%2d)%s %-40s %s\n' "${C_GRN}" "$i" "${C_RST}" "$title" "${C_DIM}[默认执行]${C_RST}"
-    else
-      printf '  %s%2d)%s %-40s\n' "${C_DIM}" "$i" "${C_RST}" "$title"
-    fi
+    printf '%s、%s\n' "$i" "$title"
   done
-  printf '%s\n' "${C_BLD}=====================================================${C_RST}"
-  info "在这个提示符后面【直接输入数字】再回车：多选用空格或逗号（例：1 3）；回车=[默认执行]的那些；a=全部；0=退出"
-  info "注意：这里不要按方向键 —— 方向键会变成 ^[[A 这类乱码，脚本认不出"
+  printf '%s\n' "${C_BLD}===================================================${C_RST}"
+  printf '  %s\n' "要哪些就填哪些的编号（多个用空格隔开，例如：1 3）"
+  printf '  %s\n' "只更新驱动 = 输入 1        全部执行 = 输入 a"
+  printf '  %s\n' "不输入任何编号直接回车 = 什么都不做，退出"
+  printf '\n'
 
   while :; do
-    if ! _prompt_line "  请输入编号（例如 1 或 1 3）" ""; then
+    if ! _prompt_line "  请输入编号" ""; then
       warn "读取输入失败"
       return 1
     fi
     raw="$REPLY"
     line="$(trim "$(menu_clean_input "$raw")")"
 
-    # 直接回车 = 执行标了 [默认执行] 的项
-    if [ -z "$line" ] && [ -z "$(trim "$raw")" ]; then
-      for i in "${!t_slug[@]}"; do
-        if [ "${t_def[$i]}" = y ]; then plan_add "${t_slug[$i]}"; fi
-      done
-      return 0
+    # 直接回车 = 什么都不做（避免误改端口/密码）
+    if [ -z "$(trim "$raw")" ]; then
+      info "没有输入任何编号，已退出（未做任何修改）。"
+      exit 0
     fi
     # 敲了东西但清洗后啥也不剩（多半是按了方向键）
     if [ -z "$line" ]; then
-      warn "没认出数字来（大概是按了方向键）：请直接用键盘输入编号，例如 1 或 1 3"
+      warn "没认出数字来（可能是按了方向键）：请直接用键盘输入编号，例如 1 或 1 3"
       continue
     fi
     case "$line" in
       0|q|Q)
-        warn "已取消选择，未做任何修改。"
+        info "已退出（未做任何修改）。"
         exit 0 ;;
       a|A|all|ALL)
         for i in "${!t_slug[@]}"; do plan_add "${t_slug[$i]}"; done
@@ -1658,7 +1652,17 @@ build_plan() {
     return 0
   fi
 
-  # 图形界面：一屏勾选（界面出错会自动降级，继续走下面的流程）
+  # 无人值守（--yes）：直接按默认项执行，不做任何交互
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    info "无人值守模式：按默认项执行（1、2、3）"
+    for entry in "${STEPS[@]}"; do
+      IFS='|' read -r slug title def fn <<<"$entry"
+      if [ "$def" = y ]; then plan_add "$slug"; fi
+    done
+    return 0
+  fi
+
+  # 图形方框：只有 --ui=whiptail（或上次记下的选择）才会走这里
   if [ "$UI_BACKEND" = "whiptail" ]; then
     if build_plan_tui; then return 0; fi
   fi
@@ -1908,7 +1912,7 @@ vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
       --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
       --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
-      --ui <模式>      界面模式：auto（默认）/ whiptail（图形方框）/ menu（编号菜单）/ plain
+      --ui <模式>      界面模式：auto（默认=编号清单）/ whiptail（图形方框）/ menu / plain
       --text           等价于 --ui=plain，强制用文字问答（老式 [Y/n]）
       --menu           等价于 --ui=menu，用编号菜单（不依赖方向键，推荐给不支持的终端）
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）

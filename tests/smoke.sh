@@ -138,9 +138,9 @@ rc="$(printf 'y\nn\nabc12345\nxyz98765\nTestPass123\nTestPass123\n' |
 check "退出码" "0" "$rc"
 check_has "提示两次不一致" "$CUR_OUT" "两次输入不一致"
 
-echo "== 7) 交互式挑步骤：只选 tuning =="
+echo "== 7) 纯文字问答（--text）：逐项 y/n =="
 CUR_OUT="$WORK/d.out"
-rc="$(printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --text)"
 check "退出码" "0" "$rc"
 check_has "只执行 tuning" "$CUR_OUT" "时区 / Swap / BBR 网络加速"
 check_has "跳过了 sysupdate" "$CUR_OUT" "已跳过：只更新内核 / 驱动 / 固件"
@@ -348,8 +348,8 @@ echo "== 15) 编号菜单 --ui=menu：输入数字即可选择（不依赖方向
 CUR_OUT="$WORK/menu.out"
 rc="$(printf '4 5\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
 check "菜单模式退出码" "0" "$rc"
-check_has "列出了编号菜单" "$CUR_OUT" "选择要执行的步骤"
-check_has "说明可以用编号多选" "$CUR_OUT" "直接输入数字"
+check_has "列出了编号菜单" "$CUR_OUT" "请选择要执行的步骤"
+check_has "说明要哪些填哪些" "$CUR_OUT" "要哪些就填哪些的编号"
 check_has "按编号选中了 fail2ban" "$CUR_OUT" "步骤 1/2：安装配置 fail2ban"
 check_has "按编号选中了 tuning" "$CUR_OUT" "步骤 2/2：时区 / Swap / BBR 网络加速"
 
@@ -366,19 +366,41 @@ rc="$(printf '１\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --fo
 check "全角数字输入退出码" "0" "$rc"
 check_has "全角数字 １ 也能识别" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
 
-# 记住界面选择：下次直接用编号菜单，不再弹方框
-printf 'menu\n' >"$WORK/uipref"
-CUR_OUT="$WORK/menu-pref.out"
-rc="$(printf '0\n' | VPS_INIT_UI_PREF="$WORK/uipref" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
-check "沿用记住的界面" "0" "$rc"
-check_has "提示沿用上次选择" "$CUR_OUT" "沿用上次的界面选择"
-check_has "直接进入编号菜单" "$CUR_OUT" "选择要执行的步骤"
-
+# 编号写错：提示后可重输；输入 0 退出
 CUR_OUT="$WORK/menu-bad.out"
-rc="$(printf 'abc\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
+rc="$(printf '99\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
 check "输错编号后退出码" "0" "$rc"
 check_has "提示编号不对" "$CUR_OUT" "编号不对"
-check_has "输入 0 可取消" "$CUR_OUT" "已取消选择"
+check_has "输入 0 可退出" "$CUR_OUT" "已退出（未做任何修改）。"
+
+echo "== 16) 默认流程（一键命令不带参数）：直接列 1、2、3… 问你 =="
+CUR_OUT="$WORK/default.out"
+rc="$(printf '1\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "默认流程退出码" "0" "$rc"
+check_has "用的是编号列表格式" "$CUR_OUT" "1、只更新内核 / 驱动 / 固件"
+check_has "列表里有第 6 项" "$CUR_OUT" "6、安装常用命令行工具"
+check_has "只执行选中的第 1 项" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
+
+# 不输入编号直接回车 = 什么都不做
+CUR_OUT="$WORK/default-empty.out"
+rc="$(printf '\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "空回车退出码" "0" "$rc"
+check_has "空回车提示什么都没做" "$CUR_OUT" "没有输入任何编号，已退出"
+
+# --yes 无人值守：按默认项执行，不做交互
+CUR_OUT="$WORK/yes.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes)"
+check "--yes 退出码" "0" "$rc"
+check_has "--yes 直接取默认项" "$CUR_OUT" "无人值守模式：按默认项执行"
+check_has "--yes 计划里是 3 项" "$CUR_OUT" "步骤 1/3"
+
+# 记住界面选择：上次选了 plain 就沿用
+printf 'plain\n' >"$WORK/uipref"
+CUR_OUT="$WORK/menu-pref.out"
+rc="$(printf 'n\nn\nn\nn\nn\nn\n' | VPS_INIT_UI_PREF="$WORK/uipref" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "沿用记住的界面" "0" "$rc"
+check_has "提示沿用上次选择" "$CUR_OUT" "沿用上次的界面选择"
+check_has "确实用了文字问答" "$CUR_OUT" "已跳过：只更新内核 / 驱动 / 固件"
 
 echo
 if [ "$FAIL" -gt 0 ]; then
