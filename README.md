@@ -5,7 +5,7 @@ Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可�
 在 VPS 上执行这一条即可（已登录 root 不用加 sudo；内容锁定在最新 Release）：
 
 ```bash
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash
+curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh | bash
 ```
 
 > 不是 root（或习惯 sudo）：把 `| bash` 换成 `| sudo bash`；要带参数：`… | bash -s -- --dry-run`
@@ -15,14 +15,14 @@ curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh 
 ```bash
 cat > /usr/local/bin/vpsnew <<'EOF'
 #!/bin/sh
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh -o /tmp/vpsnew.sh && exec bash /tmp/vpsnew.sh "$@"
+curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh -o /tmp/vpsnew.sh && exec bash /tmp/vpsnew.sh "$@"
 EOF
 chmod +x /usr/local/bin/vpsnew
 ```
 
 以后直接 psnew（每次自动拉最新版，参数照常：psnew --dry-run）。命令名想换成别的（比如 cxc16），把上面三行里的 psnew 全替换即可。
 
-> 当前版本 **V1.0.0** · 发布页 <https://github.com/ACXC-16/VPS-init/releases>
+> 当前版本 **V1.0.0** · 发布页 <https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases>
 > 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.0`。
 
 ### 关于名字
@@ -30,7 +30,7 @@ chmod +x /usr/local/bin/vpsnew
 | 叫什么 | 值 | 说明 |
 | --- | --- | --- |
 | 脚本显示名 | **ACXC16-VPS新机一键脚本** | 状态表标题、`--version`、日志里都用这个名字 |
-| 仓库（URL） | `ACXC-16/VPS-init` | 保留 ASCII：中文仓库名在链接里会变成 `%E6%96%B0...` 这种转义，一键命令会长到没法用 |
+| 仓库（URL） | `ACXC-16/ACXC-VPS-ONECLICK` | 保留 ASCII：中文仓库名在链接里会变成 `%E6%96%B0...` 这种转义，一键命令会长到没法用 |
 | 服务器上的内部文件名 | 仍是 `vps-init` 前缀 | `/var/log/vps-init.log`、`/etc/ssh/sshd_config.d/00-vps-init.conf`、`/etc/fail2ban/jail.d/vps-init.local`、`/root/vps-init-backup/` 这些**已经在你机器上生效**，改名会留下孤儿配置（尤其 SSH 的 Port 会变成两个文件都在设，优先级容易出错），所以保持不变 |
 
 ---
@@ -41,7 +41,7 @@ chmod +x /usr/local/bin/vpsnew
 
 ```
   ACXC16-VPS新机一键脚本  v1.0.0
-  适用：Ubuntu / Debian    仓库：https://github.com/ACXC-16/VPS-init
+  适用：Ubuntu / Debian    仓库：https://github.com/ACXC-16/ACXC-VPS-ONECLICK
 
   项目                             状态
   ────────────────────────────────── ──────────────────────────────
@@ -101,17 +101,17 @@ chmod +x /usr/local/bin/vpsnew
 最短的一条（root 登录直接用；非 root 把 `bash` 换成 `sudo bash`）：
 
 ```bash
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash
+curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh | bash
 ```
 
 需要额外参数（比如只更新驱动、演练模式）时这样加：
 
 ```bash
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash -s -- --only sysupdate
+curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh | bash -s -- --only sysupdate
 ```
 
 > 想用**跟随 main 分支的最新提交**（而不是锁定版本）：
-> `curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | bash`
+> `curl -fsSL https://raw.githubusercontent.com/ACXC-16/ACXC-VPS-ONECLICK/main/init.sh | bash`
 
 脚本会从 `/dev/tty` 读取你的回答，所以 `curl | bash` 这种管道执行方式下交互依然正常。
 
@@ -157,7 +157,7 @@ curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh 
 
 ```bash
 # 先演练一遍，看看会做什么
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash -s -- --dry-run
+curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh | bash -s -- --dry-run
 
 # 只更新系统 + 改 SSH 端口，端口用 52052
 sudo bash init.sh --only sysupdate,ssh-port --port 52052
@@ -320,14 +320,14 @@ shellcheck init.sh tests/smoke.sh
 **第 1 步：在 GitHub 上建空仓库**
 
 1. 打开 <https://github.com/new>；
-2. `Repository name` 填 `VPS-init`（仓库名区分大小写，地址里的 `ACXC-16/VPS-init` 就是按这个名字配的）；
+2. `Repository name` 填 `VPS-init`（仓库名区分大小写，地址里的 `ACXC-16/ACXC-VPS-ONECLICK` 就是按这个名字配的）；
 3. 选 `Public`（要用一键脚本，仓库必须公开）；
 4. **不要**勾选 `Add a README file`；
 5. 点 `Create repository`。
 
 **第 2 步：推送**
 
-仓库地址已经配好了（`ACXC-16/VPS-init`），本地 Git 仓库也已初始化并提交，所以只要：
+仓库地址已经配好了（`ACXC-16/ACXC-VPS-ONECLICK`），本地 Git 仓库也已初始化并提交，所以只要：
 
 ```powershell
 cd C:\Users\IdeaPad5-16\Documents\deepseek-harness\default-workspace\vps-init
@@ -343,7 +343,7 @@ git push -u origin main
 > git init -b main
 > git add .
 > git commit -m "feat: vps-init 首版"
-> git remote add origin https://github.com/ACXC-16/VPS-init.git
+> git remote add origin https://github.com/ACXC-16/ACXC-VPS-ONECLICK.git
 > git push -u origin main
 > ```
 
@@ -352,13 +352,13 @@ git push -u origin main
 先确认仓库是 **Public**，然后打开这个地址，能看到脚本内容就说明 raw 链接正常：
 
 ```
-https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh
+https://raw.githubusercontent.com/ACXC-16/ACXC-VPS-ONECLICK/main/init.sh
 ```
 
 然后在 VPS 上执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ACXC-16/ACXC-VPS-ONECLICK/main/init.sh | sudo bash
 ```
 
 **以后更新**：改完文件后 `git add -A && git commit -m "..." && git push` 即可，`raw` 链接永远指向最新版。
@@ -377,7 +377,7 @@ GitHub 上这两样都能随时改，改完把仓库里的地址一起换掉就�
 ```bash
 cd vps-init
 # 1) 换掉文件里的地址（README.md / init.sh / LICENSE 里的用户名或仓库名）
-sed -i 's|ACXC-16/VPS-init|新用户名/新仓库名|g' README.md init.sh
+sed -i 's|ACXC-16/ACXC-VPS-ONECLICK|新用户名/新仓库名|g' README.md init.sh
 
 # 2) 换掉本地仓库的远程地址
 git remote set-url origin https://github.com/新用户名/新仓库名.git
@@ -389,7 +389,7 @@ Windows 上如果没有 `sed`，用 PowerShell（无 BOM，不破坏 LF 换行�
 ```powershell
 cd C:\Users\IdeaPad5-16\Documents\deepseek-harness\default-workspace\vps-init
 Get-ChildItem -Path . -Recurse -File -Include *.md, *.sh, LICENSE | ForEach-Object {
-  $t = [System.IO.File]::ReadAllText($_.FullName) -replace 'ACXC-16/VPS-init', '新用户名/新仓库名'
+  $t = [System.IO.File]::ReadAllText($_.FullName) -replace 'ACXC-16/ACXC-VPS-ONECLICK', '新用户名/新仓库名'
   [System.IO.File]::WriteAllText($_.FullName, $t, (New-Object System.Text.UTF8Encoding($false)))
 }
 git remote set-url origin https://github.com/新用户名/新仓库名.git
@@ -412,14 +412,14 @@ git push origin v1.0.0
 
 发布完成后：
 
-- 发布页：<https://github.com/ACXC-16/VPS-init/releases>
+- 发布页：<https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases>
 - **稳定下载地址**（永远指向最新 Release，不会因为改代码而变）：
-  `https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh`
+  `https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh`
 - 附件里还有 `SHA256SUMS.txt`，可以核对下载到的脚本有没有被动过：
 
 ```bash
-curl -fsSLO https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh
-curl -fsSLO https://github.com/ACXC-16/VPS-init/releases/latest/download/SHA256SUMS.txt
+curl -fsSLO https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh
+curl -fsSLO https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt
 ```
 
