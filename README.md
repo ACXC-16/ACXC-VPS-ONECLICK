@@ -2,15 +2,28 @@
 
 Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可视化菜单），改错会失联的操作（SSH 端口、root 密码）带备份、校验和自动回滚。
 
-在 VPS 上以 root 执行这一条即可（内容锁定在最新 Release，不会因为你以后改代码而变）：
+在 VPS 上执行这一条即可（已登录 root 不用加 sudo；内容锁定在最新 Release）：
 
 ```bash
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash
 ```
 
-> 当前版本 **v1.0.6** · 发布页 <https://github.com/ACXC-16/VPS-init/releases>
-> 界面按键不灵（方向键变 `^[[C` 乱码）就加 `--menu`；想用老式 `[Y/n]` 加 `--text`：在 `sudo bash` 后面补 `-s -- --menu` 即可。
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.6`。
+> 不是 root（或习惯 sudo）：把 `| bash` 换成 `| sudo bash`；要带参数：`… | bash -s -- --dry-run`
+
+**更省事（可选，装一次以后只敲 `vps-init`）** —— 整段复制执行一次：
+
+```bash
+cat > /usr/local/bin/vps-init <<'EOF'
+#!/bin/sh
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh -o /tmp/vps-init.sh && exec bash /tmp/vps-init.sh "$@"
+EOF
+chmod +x /usr/local/bin/vps-init
+```
+
+以后直接 `vps-init`（每次自动拉最新版，参数照常：`vps-init --dry-run`）。
+
+> 当前版本 **v1.0.7** · 发布页 <https://github.com/ACXC-16/VPS-init/releases>
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.7`。
 
 ---
 
@@ -87,20 +100,20 @@ curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh 
 
 ## 一键使用
 
-在 VPS 上以 root 执行这一条（复制即用）：
+最短的一条（root 登录直接用；非 root 把 `bash` 换成 `sudo bash`）：
 
 ```bash
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash
 ```
 
-需要额外参数（比如只更新驱动、用编号菜单）时这样加：
+需要额外参数（比如只更新驱动、演练模式）时这样加：
 
 ```bash
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --menu --only sysupdate
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash -s -- --only sysupdate
 ```
 
 > 想用**跟随 main 分支的最新提交**（而不是锁定版本）：
-> `curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash`
+> `curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | bash`
 
 脚本会从 `/dev/tty` 读取你的回答，所以 `curl | bash` 这种管道执行方式下交互依然正常。
 
@@ -146,7 +159,7 @@ curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh 
 
 ```bash
 # 先演练一遍，看看会做什么
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --dry-run
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash -s -- --dry-run
 
 # 只更新系统 + 改 SSH 端口，端口用 52052
 sudo bash init.sh --only sysupdate,ssh-port --port 52052
@@ -395,8 +408,8 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 git add -A && git commit -m "feat: 新增 xxx" && git push
 
 # 2) 打个版本号 tag 并推送 —— GitHub 会自动跑测试、创建 Release、附上 init.sh
-git tag -a v1.0.6 -m "vps-init v1.0.6"
-git push origin v1.0.6
+git tag -a v1.0.7 -m "vps-init v1.0.7"
+git push origin v1.0.7
 ```
 
 发布完成后：
