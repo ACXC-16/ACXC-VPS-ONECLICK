@@ -33,6 +33,8 @@ SCRIPT_VERSION="1.0.0"
 REPO_SLUG="ACXC-16/ACXC-VPS-ONECLICK"
 
 DEFAULT_SSH_PORT="52052"
+# 菜单里选「使用默认设置」时用的 root 密码
+DEFAULT_ROOT_PASSWORD="acxc1616"
 MANAGED_SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-init.conf"
 FAIL2BAN_CONF="/etc/fail2ban/jail.d/vps-init.local"
 SYSCTL_BBR_CONF="/etc/sysctl.d/99-vps-init-bbr.conf"
@@ -57,6 +59,7 @@ LAST_SSH_BACKUP=""
 OPT_PASSWORD=""
 GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
+SSH_PORT_CHANGED=""
 
 # 交互界面：状态表 + 编号菜单（纯文字，任何终端都能用；不支持图形方框是有意为之）
 
@@ -73,8 +76,7 @@ declare -a RESULT_NAMES=() RESULT_STATES=()
 # 默认值只是"直接回车"时的取值，每一项都会单独询问 Y/N。
 STEPS=(
   "sysupdate|更新内核 / 驱动 / 固件|y|step_sysupdate"
-  "ssh-port|修改 SSH 端口（默认 ${DEFAULT_SSH_PORT}）|y|step_ssh_port"
-  "root-passwd|修改 root 密码|y|step_root_password"
+  "access|修改 SSH 端口 / root 密码|y|step_access"
   "extras|安装常用工具 / BBR网络加速 / Swap|n|step_extras"
 )
 
@@ -675,29 +677,36 @@ step_sysupdate() {
   return "$rc"
 }
 # ============================== 步骤 2：SSH 端口 ============================
-step_ssh_port() {
+# ==================== 步骤 2：修改 SSH 端口 / root 密码 ====================
+# 说明：询问部分（ssh_ask_port / passwd_ask）和执行部分（ssh_apply_port /
+# passwd_apply）分开写，这样"默认设置"和"自定义"两条路都能复用同一套安全逻辑：
+# 备份 → 写入 → sshd -t/-T 校验 → 失败自动回滚。
+
+# 询问新端口 → SSH_NEW_PORT / SSH_KEEP_OLD（失败返回 1）
+ssh_ask_port() {
+  local old_ports="" new_port="" ssherr="" keep_old=0
+
+  SSH_NEW_PORT=""; SSH_KEEP_OLD=0; SSH_OLD_PORTS=""
+
   if [ ! -f /etc/ssh/sshd_config ]; then
     err "找不到 /etc/ssh/sshd_config，本机可能没安装 OpenSSH Server"
     return 1
   fi
-
-  local old_ports new_port keep_old=0 ssherr="" p stamp bak other
 
   old_ports="$(trim "$(current_ssh_ports)")"
   if [ -z "$old_ports" ] && [ -n "$SSH_M_PORTS" ]; then
     old_ports="$(trim "$SSH_M_PORTS")"
     info "从上次留下的受管配置里读到端口：${old_ports}"
   fi
+  SSH_OLD_PORTS="$old_ports"
   info "当前生效的 SSH 端口：${old_ports:-未知}"
 
-  # 先看现有配置能不能通过校验
   ssherr="$(sshd_test 2>&1)" || {
     warn "当前 SSH 配置本身就有语法问题："
     printf '%s\n' "$ssherr" | sed 's/^/    /'
     if ! ask_yn "仍然继续修改？（脚本会先备份，可回滚）" n; then return 1; fi
   }
 
-  # 端口选择
   new_port="$OPT_PORT"
   if [ -n "$new_port" ]; then
     if ! valid_port "$new_port"; then
@@ -728,7 +737,6 @@ step_ssh_port() {
     done
   fi
 
-  # 过渡期是否保留旧端口
   if [ -n "$old_ports" ]; then
     case " $old_ports " in
       *" $new_port "*) ;;
@@ -738,6 +746,18 @@ step_ssh_port() {
         fi ;;
     esac
   fi
+
+  SSH_NEW_PORT="$new_port"
+  SSH_KEEP_OLD="$keep_old"
+  return 0
+}
+
+# 应用端口：$1=新端口 [$2=是否保留旧端口 0/1]
+ssh_apply_port() {
+  local new_port="$1" keep_old="${2:-0}" old_ports="" p stamp bak other
+
+  old_ports="$SSH_OLD_PORTS"
+  [ -n "$old_ports" ] || old_ports="$(trim "$(current_ssh_ports)")"
 
   # 改端口前的安全提示
   printf '\n'
@@ -832,9 +852,11 @@ step_ssh_port() {
   return 0
 }
 
-# ============================== 步骤 3：root 密码 ===========================
-step_root_password() {
-  local pw="" gen=0 p1="" p2="" eff="" prl="" pa=""
+# 询问新密码 → PASSWD_NEW / PASSWD_GEN（PASSWD_NEW 为空 = 不改密码）
+passwd_ask() {
+  local pw="" gen=0 p1="" p2=""
+
+  PASSWD_NEW=""; PASSWD_GEN=0
 
   warn "改密码请务必先确认：当前会话不要断开，最好用另一个终端保持登录状态。"
   info "当前 root 密码状态：$(passwd -S root 2>/dev/null || printf '未知')"
@@ -892,6 +914,15 @@ step_root_password() {
     p1=""; p2=""
   fi
 
+  PASSWD_NEW="$pw"
+  PASSWD_GEN="$gen"
+  return 0
+}
+
+# 应用密码：$1=新密码 [$2=是否随机生成 0/1]
+passwd_apply() {
+  local pw="$1" gen="${2:-0}" eff="" prl="" pa=""
+
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "${C_DIM}  [dry-run] 将执行: printf 'root:<新密码>' | chpasswd${C_RST}"
     if [ "$gen" -eq 1 ]; then info "[dry-run] 本次随机密码：$pw"; fi
@@ -907,12 +938,19 @@ step_root_password() {
     return 1
   fi
 
+  # 记下来，最后结束界面再完整列一次（不写日志）
+  NEW_ROOT_PASSWORD="$pw"
+
   if [ "$gen" -eq 1 ]; then
-    NEW_ROOT_PASSWORD="$pw"   # 最后汇总时再显示一次，防止中途刷屏看不到
     printf '\n%s\n' "${C_BLD}${C_YEL}  ★ 新生成的 root 密码（只显示这一次，请立即保存）：${C_RST}"
     printf '%s\n\n' "${C_BLD}      $pw${C_RST}"
   else
-    info "已设置为手动输入的密码（脚本不会记录明文密码）。"
+    printf '\n%s\n' "${C_BLD}${C_YEL}  ★ root 密码已设置为：${C_RST}"
+    printf '%s\n\n' "${C_BLD}      $pw${C_RST}"
+    if [ "$pw" = "$DEFAULT_ROOT_PASSWORD" ]; then
+      warn "这是脚本内置的默认密码，容易被猜到；建议登录后尽快改成你自己的强密码。"
+    fi
+    printf '  %s\n' "脚本不会把明文密码写进日志；结束界面上还会再显示一次。"
   fi
   pw=""
 
@@ -960,6 +998,64 @@ step_root_password() {
   ok "SSH 登录设置已更新：$(printf '%s\n' "$eff" | awk '/^permitrootlogin |^passwordauthentication /{printf "%s=%s ", $1, $2}')"
   warn "当前会话不会断开；请另开终端验证能登录后，再考虑关闭旧连接。"
   return 0
+}
+
+# 菜单里的第 2 项：默认设置 / 自定义 / 不修改
+step_access() {
+  local rc=0 choice=""
+
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    ssh_ask_port || rc=1
+    passwd_ask || rc=1
+  else
+    printf '\n  %s\n' "${C_BLD}当前：SSH 端口 $(trim "$(current_ssh_ports)") · root 密码 $(status_passwd)${C_RST}"
+    printf '  %s\n' "1) 使用默认设置（SSH 端口 ${DEFAULT_SSH_PORT}，root 密码 ${DEFAULT_ROOT_PASSWORD}）"
+    printf '  %s\n' "2) 自定义（分别输入端口和密码）"
+    printf '  %s\n' "0) 不修改，返回"
+    if ! menu_read_choice; then return 1; fi
+    choice="$REPLY"
+
+    case "$choice" in
+      0|q|Q)
+        info "已返回：SSH 端口和 root 密码都保持原样。"
+        return 0 ;;
+      1)
+        SSH_OLD_PORTS="$(trim "$(current_ssh_ports)")"
+        SSH_NEW_PORT="$DEFAULT_SSH_PORT"
+        SSH_KEEP_OLD=1
+        PASSWD_NEW="$DEFAULT_ROOT_PASSWORD"
+        PASSWD_GEN=0
+        warn "使用默认设置：SSH 端口 ${DEFAULT_SSH_PORT} + 脚本内置的默认 root 密码（稍后会在结束界面显示）"
+        info "提醒：默认密码容易被猜到，登录成功后建议尽快改成你自己的强密码（本菜单选 2 自定义）。"
+        ;;
+      2)
+        if ! ssh_ask_port; then
+          warn "跳过 SSH 端口修改（读不到 SSH 配置或已取消），继续处理 root 密码"
+          SSH_NEW_PORT=""
+        fi
+        passwd_ask || return 1
+        ;;
+      *)
+        warn "无效的选择：$choice（请输入 0 / 1 / 2）"
+        return 1 ;;
+    esac
+  fi
+
+  if [ -n "$SSH_NEW_PORT" ]; then
+    if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
+      SSH_PORT_CHANGED="$SSH_NEW_PORT"
+    else
+      rc=1
+    fi
+  else
+    info "SSH 端口保持不变。"
+  fi
+  if [ -n "$PASSWD_NEW" ]; then
+    passwd_apply "$PASSWD_NEW" "$PASSWD_GEN" || rc=1
+  else
+    info "root 密码保持不变。"
+  fi
+  return "$rc"
 }
 
 # ============================== 步骤 4：fail2ban ============================
@@ -1455,11 +1551,14 @@ status_extras() { # 工具 / fail2ban / Swap / BBR 一行说完
   printf '%s' "$out"
 }
 
+status_access() { # SSH 端口 + root 密码 一行说完
+  printf '%s · 密码%s' "$(status_ssh)" "$(status_passwd)"
+}
+
 status_of() { # $1=步骤标识 → 输出状态文字
   case "$1" in
     sysupdate)   status_kernel ;;
-    ssh-port)    status_ssh ;;
-    root-passwd) status_passwd ;;
+    access)      status_access ;;
     extras)      status_extras ;;
     *)           printf '—' ;;
   esac
@@ -1527,13 +1626,11 @@ show_log_tail() { # 看最近的日志
 show_menu() {
   printf '%s\n' "${C_BLD}${C_CYN}操作菜单${C_RST}"
   printf '  %s\n' "1) 更新内核 / 驱动 / 固件"
-  printf '  %s\n' "2) 修改 SSH 端口"
-  printf '  %s\n' "3) 修改 root 密码"
-  printf '  %s\n' "4) 安装常用工具 / BBR网络加速 / Swap"
-  printf '  %s\n' "5) 查看系统信息"
-  printf '  %s\n' "6) 查看运行日志"
-  printf '  %s\n' "7) 更新脚本"
-  printf '  %s\n' "8) 全部按默认执行（1 2 3）"
+  printf '  %s\n' "2) 修改 SSH 端口 / root 密码"
+  printf '  %s\n' "3) 安装常用工具 / BBR网络加速 / Swap"
+  printf '  %s\n' "4) 查看系统信息"
+  printf '  %s\n' "5) 查看运行日志"
+  printf '  %s\n' "6) 更新脚本"
   printf '  %s\n' "0) 退出"
   printf '\n'
 }
@@ -1560,7 +1657,7 @@ menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
 
 # 菜单循环：每次都清屏重画（菜单回到最上面）→ 选一项 → 执行 → 回来，直到选 0 退出
 menu_loop() {
-  local choice="" n=0 entry_slug=""
+  local choice="" n=0
   refresh_screen
   while :; do
     show_status_table
@@ -1573,7 +1670,7 @@ menu_loop() {
     case "$choice" in
       0|q|Q|exit|quit)
         break ;;
-      1|2|3|4)
+      1|2|3)
         n="$choice"
         PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
         if plan_add "$(step_slug_by_index "$n")"; then
@@ -1585,36 +1682,24 @@ menu_loop() {
         fi
         refresh_screen
         ;;
-      5)
+      4)
         show_system_info
         pause_enter
         refresh_screen
         ;;
-      6)
+      5)
         show_log_tail 40
         pause_enter
         refresh_screen
         ;;
-      7)
+      6)
         update_script
         invalidate_status
         pause_enter
         refresh_screen
         ;;
-      8|a|A|all|ALL)
-        info "按默认项执行：1、2、3"
-        PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
-        for entry_slug in sysupdate ssh-port root-passwd; do
-          plan_add "$entry_slug"
-        done
-        run_plan
-        invalidate_status
-        printf '\n'
-        pause_enter
-        refresh_screen
-        ;;
       *)
-        warn "无效的选择：$choice（请输入 0-8）"
+        warn "无效的选择：$choice（请输入 0-6）"
         ;;
     esac
   done
@@ -1755,11 +1840,31 @@ print_summary() {
 }
 
 print_next_steps() {
-  local new="" keep=""
+  local new="" keep="" cur_port=""
   title "接下来请注意"
-  if [ -n "$NEW_ROOT_PASSWORD" ]; then
-    printf '  * %s\n' "${C_BLD}${C_YEL}root 密码（本次由脚本生成，请立刻保存！）：${NEW_ROOT_PASSWORD}${C_RST}"
+
+  # 本次设置的端口 / 密码：统一在这里完整列一次
+  if [ -n "$SSH_PORT_CHANGED" ] || [ -n "$NEW_ROOT_PASSWORD" ]; then
+    printf '%s\n' "  ${C_BLD}${C_GRN}★ 本次为你设置的信息（请现在保存好）：${C_RST}"
+    if [ -n "$NEW_ROOT_PASSWORD" ]; then
+      printf '     %sroot 密码：%s%s\n' "${C_BLD}" "$NEW_ROOT_PASSWORD" "${C_RST}"
+    fi
+    if [ -n "$SSH_PORT_CHANGED" ]; then
+      printf '     %sSSH 端口：%s%s\n' "${C_BLD}" "$SSH_PORT_CHANGED" "${C_RST}"
+    elif [ -n "$NEW_ROOT_PASSWORD" ]; then
+      cur_port="$(trim "$(current_ssh_ports)")"
+      [ -n "$cur_port" ] && printf '     SSH 端口：%s（本次未改动）\n' "$cur_port"
+    fi
+    printf '\n'
   fi
+
+  if [ -n "$NEW_ROOT_PASSWORD" ]; then
+    printf '  * 用新密码登录：ssh -p %s root@<服务器IP>\n' "${SSH_PORT_CHANGED:-$(trim "$(current_ssh_ports)")}"
+    if [ "$NEW_ROOT_PASSWORD" = "$DEFAULT_ROOT_PASSWORD" ]; then
+      printf '  * %s默认密码容易被猜到，建议尽快改成自己的强密码（本脚本第 2 项 → 自定义）%s\n' "${C_YEL}" "${C_RST}"
+    fi
+  fi
+
   if [ -n "$SSH_M_PORTS" ]; then
     new="$(printf '%s' "$SSH_M_PORTS" | awk '{print $1}')"
     keep="$(printf '%s' "$SSH_M_PORTS" | awk '{$1=""; sub(/^ +/,""); print}')"
@@ -1776,7 +1881,7 @@ print_next_steps() {
       printf '     4) 万一连不上：用 VNC/控制台登录后执行 cp -a %s/. /etc/ssh/ && systemctl restart ssh\n' "$LAST_SSH_BACKUP"
     fi
   fi
-  printf '  * 日志文件：%s\n' "${LOG_FILE:-未启用}"
+  printf '  * 日志文件：%s（不含明文密码）\n' "${LOG_FILE:-未启用}"
   printf '  * 再次运行本脚本可随时追加/调整设置（重复执行是安全的）\n'
   printf '\n'
   return 0
@@ -1962,6 +2067,15 @@ parse_args() {
     esac
     shift
   done
+  # 兼容旧写法：--only ssh-port / --only root-passwd 都当作 access（两者已合并为一项）
+  if [ -n "$ONLY_LIST" ]; then
+    ONLY_LIST="${ONLY_LIST//ssh-port/access}"
+    ONLY_LIST="${ONLY_LIST//root-passwd/access}"
+  fi
+  if [ -n "$SKIP_LIST" ]; then
+    SKIP_LIST="${SKIP_LIST//ssh-port/access}"
+    SKIP_LIST="${SKIP_LIST//root-passwd/access}"
+  fi
   if [ -n "$ONLY_LIST" ]; then
     local s
     for s in $(printf '%s' "$ONLY_LIST" | tr ',' ' '); do
