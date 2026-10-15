@@ -80,7 +80,7 @@ check_hasnt() { # $1=说明 $2=输出文件 $3=不该出现的关键字
 run_case() { # $1=输出文件，其余为参数；stdin 透传给被测脚本
   local out="$1"
   shift
-  VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 bash "$@" >"$out" 2>&1
+  ACXC_VPS_FORCE_STDIN=1 ACXC_VPS_ALLOW_NONROOT=1 bash "$@" >"$out" 2>&1
   printf '%s' "$?"
 }
 
@@ -239,15 +239,15 @@ check "--port 缺参数退出码" "1" "$rc"
 
 echo "== 14) 受管 SSH 配置回读（跨次运行不互相覆盖） =="
 CUR_OUT="$WORK/unit.out"
-cat >"$FAKE/sshd_config.d/00-vps-init.conf" <<'EOF'
-# --- vps-init managed block: start ---
+cat >"$FAKE/sshd_config.d/00-acxc-vps.conf" <<'EOF'
+# --- acxc-vps managed block: start ---
 Port 52052
 Port 22
 PermitRootLogin yes
-# --- vps-init managed block: end ---
+# --- acxc-vps managed block: end ---
 EOF
 {
-  printf 'MANAGED_SSHD_CONF=%s\n' "$FAKE/sshd_config.d/00-vps-init.conf"
+  printf 'MANAGED_SSHD_CONF=%s\n' "$FAKE/sshd_config.d/00-acxc-vps.conf"
   sed -n '/^ssh_load_managed() {/,/^}/p' "$ROOT/init.sh"
   printf 'ssh_load_managed\n'
   # shellcheck disable=SC2016  # 这里要生成字面量 %s，故意用单引号
@@ -269,14 +269,14 @@ check_hasnt "不再问清理" "$CUR_OUT" "autoremove"
 echo "== 16) 选 Y 立即重启：不再等 10 秒 =="
 printf 'linux-base\n' >"$WORK/reboot-required"
 printf 'libc6\n' >"$WORK/reboot-required.pkgs"
-export VPS_INIT_REBOOT_REQUIRED="$WORK/reboot-required"
+export ACXC_VPS_REBOOT_REQUIRED="$WORK/reboot-required"
 CUR_OUT="$WORK/reboot.out"
 rc="$(printf '0\ny\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "重启流程退出码" "0" "$rc"
 check_has "提示需要重启" "$CUR_OUT" "系统需要重启"
 check_has "dry-run 下不真重启" "$CUR_OUT" "[dry-run] 将执行 reboot"
 check_hasnt "不再等待 10 秒" "$CUR_OUT" "10 秒"
-unset VPS_INIT_REBOOT_REQUIRED
+unset ACXC_VPS_REBOOT_REQUIRED
 
 echo "== 17) 真实 Ubuntu 的 /etc/os-release 不能污染脚本版本号 =="
 mkdir -p "$WORK/fakeos"
@@ -316,7 +316,7 @@ echo "== 20) 快捷命令 acxc：脚本启动时自动安装 =="
 SCDIR="$WORK/bin-shortcut"
 CACHE="$WORK/cache-shortcut"
 CUR_OUT="$WORK/shortcut.out"
-rc="$(printf '0\n' | VPS_INIT_SHORTCUT_DIR="$SCDIR" VPS_INIT_CACHE_DIR="$CACHE" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '0\n' | ACXC_VPS_SHORTCUT_DIR="$SCDIR" ACXC_VPS_CACHE_DIR="$CACHE" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "启动自动装快捷命令退出码" "0" "$rc"
 check_has "启动时提示快捷命令已就绪" "$CUR_OUT" "快捷命令已就绪"
 if [ -x "$SCDIR/acxc" ]; then
@@ -351,6 +351,40 @@ check_has "结束界面列出了本次设置的 SSH 端口" "$CUR_OUT" "SSH 端�
 check_has "提示用新密码登录" "$CUR_OUT" "ssh -p 52052 root@"
 check_has "明确日志不含明文密码" "$CUR_OUT" "不含明文密码"
 check_hasnt "明文密码不会写进日志文件" "$WORK/summary.log" "acxc1616"
+
+echo "== 22) 旧文件名迁移：vps-init → acxc-vps =="
+MIG="$WORK/mig"
+mkdir -p "$MIG/sshd" "$MIG/f2b" "$MIG/sysctl"
+cat >"$MIG/sshd/00-vps-init.conf" <<'EOF'
+# --- vps-init managed block: start ---
+Port 52052
+# --- vps-init managed block: end ---
+EOF
+printf '[sshd]\nenabled = true\n' >"$MIG/f2b/vps-init.local"
+printf 'net.ipv4.tcp_congestion_control = bbr\n' >"$MIG/sysctl/99-vps-init-bbr.conf"
+sed -e "s|/etc/ssh/sshd_config\.d|$MIG/sshd|g" \
+    -e "s|/etc/fail2ban/jail\.d|$MIG/f2b|g" \
+    -e "s|/etc/sysctl\.d|$MIG/sysctl|g" \
+    "$ROOT/init.sh" >"$WORK/init-mig.sh"
+{
+  printf 'DRY_RUN=0\nCOLOR_OFF=1\nLOG_FILE="%s/mig.log"\n' "$MIG"
+  # 迁移函数依赖这些路径常量，从打过补丁的副本里取出来
+  grep -E '^(LEGACY_|MANAGED_SSHD_CONF=|FAIL2BAN_CONF=|SYSCTL_BBR_CONF=)' "$WORK/init-mig.sh"
+  sed -n '/^migrate_legacy_paths() {/,/^}/p' "$WORK/init-mig.sh"
+  sed -n '/^invalidate_status() {/p' "$WORK/init-mig.sh"
+  printf 'migrate_legacy_paths\n'
+} >"$WORK/mig.sh"
+CUR_OUT="$WORK/mig.out"
+bash "$WORK/mig.sh" >"$CUR_OUT" 2>&1
+if [ -f "$MIG/sshd/00-acxc-vps.conf" ] && [ ! -f "$MIG/sshd/00-vps-init.conf" ]; then
+  ok "SSH 配置已改名"
+else
+  bad "SSH 配置没有改名"
+fi
+check_has "管理块标记也跟着换了" "$MIG/sshd/00-acxc-vps.conf" "acxc-vps managed block: start"
+check_hasnt "旧的标记已经不在了" "$MIG/sshd/00-acxc-vps.conf" "vps-init managed block"
+if [ -f "$MIG/f2b/acxc-vps.local" ] && [ ! -f "$MIG/f2b/vps-init.local" ]; then ok "fail2ban 配置已改名"; else bad "fail2ban 配置没有改名"; fi
+if [ -f "$MIG/sysctl/99-acxc-vps-bbr.conf" ] && [ ! -f "$MIG/sysctl/99-vps-init-bbr.conf" ]; then ok "BBR 配置已改名"; else bad "BBR 配置没有改名"; fi
 
 echo
 if [ "$FAIL" -gt 0 ]; then
