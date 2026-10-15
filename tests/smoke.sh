@@ -402,6 +402,22 @@ check "沿用记住的界面" "0" "$rc"
 check_has "提示沿用上次选择" "$CUR_OUT" "沿用上次的界面选择"
 check_has "确实用了文字问答" "$CUR_OUT" "已跳过：只更新内核 / 驱动 / 固件"
 
+echo "== 17) 默认模式绝对不能调用 whiptail（只要没显式 --ui=whiptail） =="
+CUR_OUT="$WORK/auto-noargs.out"
+printf 'check:sysupdate\n' >"$WORK/ans-auto"
+rm -f "$WORK/auto-nocall.log" "$WORK/ans-auto.idx"
+printf '1\ny\nn\nn\nn\n' | MOCK_ANSWERS="$WORK/ans-auto" MOCK_LOG="$WORK/auto-nocall.log" \
+  PATH="$WORK/bin:$PATH" VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
+  bash "$WORK/init-fake.sh" --force --dry-run >"$CUR_OUT" 2>&1
+rc=$?
+check "默认模式退出码" "0" "$rc"
+check_has "默认用的是编号清单" "$CUR_OUT" "1、只更新内核 / 驱动 / 固件"
+if [ -s "$WORK/auto-nocall.log" ]; then
+  bad "默认模式不应该调用 whiptail（日志：$(tr '\n' ' ' <"$WORK/auto-nocall.log")）"
+else
+  ok "默认模式全程没有调用 whiptail"
+fi
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
