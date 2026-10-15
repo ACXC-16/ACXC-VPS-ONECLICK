@@ -8,9 +8,9 @@ Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可�
 curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
 ```
 
-> 当前版本 **v1.0.3** · 发布页 <https://github.com/qinjing-arch/VPS-init/releases>
+> 当前版本 **v1.0.4** · 发布页 <https://github.com/qinjing-arch/VPS-init/releases>
 > 界面按键不灵（方向键变 `^[[C` 乱码）就加 `--menu`；想用老式 `[Y/n]` 加 `--text`：在 `sudo bash` 后面补 `-s -- --menu` 即可。
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.3`。
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.4`。
 
 ---
 
@@ -36,8 +36,10 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
    6) 安装常用命令行工具
 =====================================================
 直接输入编号即可：多选用空格或逗号（例：1 3）；回车=[默认执行]的那些；a=全部；0=退出
-  请输入编号: 1 3
+  请输入编号（例如 1 或 1 3）: 1 3
 ```
+
+**在编号提示符后面请直接用键盘敲数字**（支持全角数字 `１`、逗号 `,` `，`、顿号 `、` 等）。**不要按方向键**：普通输入模式下方向键会变成 `^[[A` 这种乱码字符，脚本认不出数字，会提示「没认出数字来」并让你重新输入（不会卡住，也不会误执行）。
 
 图形方框那一档里，还会配套用**输入框**收端口/时区、**密码框**收 root 密码（不回显）、**Yes/No 框**确认危险操作、改端口前弹**检查清单提示框**。
 
@@ -61,6 +63,7 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
 
 - **什么都不用按**：自检框等 **10 秒**、普通方框等 300 秒，超时后**自动改用编号菜单**继续跑；
 - **按 Ctrl+C 也不会退出脚本**：方框会被关掉，脚本自动切到编号菜单继续（这一点以前是直接退出的，已经改掉）；
+- **脚本会记住你的界面选择**：决定用哪一档之后会写进 `/root/.vps-init-ui`，下次运行**直接用同一种，不再弹方框、不再等 10 秒**；想换：`--ui=whiptail` / `--menu` / `--text`；
 - 想直接跳过图形方框：加 `--menu`（编号菜单）或 `--text`（文字问答）；
 - 想调等待时间：`VPS_INIT_UI_TIMEOUT=60`（秒）、`VPS_INIT_UI_SELFTEST_TIMEOUT=10`；
 - 系统没有 `whiptail` 时会先问你要不要装（几十 KB），不装就用编号菜单；没有 UTF-8 locale、终端小于 60×14 也会自动降档。
@@ -290,7 +293,7 @@ STEPS=(
 
 ```bash
 bash -n init.sh          # 语法检查
-bash tests/smoke.sh      # 冒烟测试：73 项断言，全部在 --dry-run 下跑，不改系统
+bash tests/smoke.sh      # 冒烟测试：81 项断言，全部在 --dry-run 下跑，不改系统
 shellcheck init.sh tests/smoke.sh
 ```
 
@@ -403,8 +406,8 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 git add -A && git commit -m "feat: 新增 xxx" && git push
 
 # 2) 打个版本号 tag 并推送 —— GitHub 会自动跑测试、创建 Release、附上 init.sh
-git tag -a v1.0.3 -m "vps-init v1.0.3"
-git push origin v1.0.3
+git tag -a v1.0.4 -m "vps-init v1.0.4"
+git push origin v1.0.4
 ```
 
 发布完成后：
@@ -454,8 +457,8 @@ sha256sum -c SHA256SUMS.txt
 ```
 vps-init/
 ├── init.sh                    # 主脚本（一键执行的就是它）
-├── tests/smoke.sh             # 冒烟测试（73 项断言，dry-run，不改系统）
-├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 73 项冒烟测试
+├── tests/smoke.sh             # 冒烟测试（81 项断言，dry-run，不改系统）
+├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 81 项冒烟测试
 ├── .github/workflows/release.yml # 打 tag：测试通过后自动发 Release（附 init.sh + SHA256）
 ├── .gitattributes             # 强制 LF 换行（防止 Windows 上改坏脚本）
 ├── LICENSE                    # MIT
