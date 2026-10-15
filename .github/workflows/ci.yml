@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 语法检查 / 冒烟测试 / ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 显示运行环境
+        run: |
+          bash --version | head -n 1
+          cat /etc/os-release | head -n 2
+
+      - name: bash 语法检查
+        run: |
+          bash -n init.sh
+          bash -n tests/smoke.sh
+
+      - name: ShellCheck 静态检查（warning 及以上）
+        run: shellcheck --severity=warning init.sh tests/smoke.sh
+
+      - name: 冒烟测试（全部在 --dry-run 下执行，不改系统）
+        run: bash tests/smoke.sh
