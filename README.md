@@ -10,8 +10,8 @@ curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/ini
 curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
 ```
 
-> 当前版本 **v1.0.0**，发布页：<https://github.com/qinjing-arch/VPS-init/releases>
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.0` 即可。
+> 当前版本 **v1.0.1**，发布页：<https://github.com/qinjing-arch/VPS-init/releases>
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.1` 即可。
 
 ---
 
@@ -264,7 +264,7 @@ STEPS=(
 
 ```bash
 bash -n init.sh          # 语法检查
-bash tests/smoke.sh      # 冒烟测试：49 项断言，全部在 --dry-run 下跑，不改系统
+bash tests/smoke.sh      # 冒烟测试：59 项断言，全部在 --dry-run 下跑，不改系统
 shellcheck init.sh tests/smoke.sh
 ```
 
@@ -428,7 +428,7 @@ sha256sum -c SHA256SUMS.txt
 ```
 vps-init/
 ├── init.sh                    # 主脚本（一键执行的就是它）
-├── tests/smoke.sh             # 冒烟测试（49 项断言，dry-run，不改系统）
+├── tests/smoke.sh             # 冒烟测试（59 项断言，dry-run，不改系统）
 ├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 59 项冒烟测试
 ├── .github/workflows/release.yml # 打 tag：测试通过后自动发 Release（附 init.sh + SHA256）
 ├── .gitattributes             # 强制 LF 换行（防止 Windows 上改坏脚本）

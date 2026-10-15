@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.0
+#  版本: 1.0.1
 #  仓库: https://github.com/qinjing-arch/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ set -u
 set -o pipefail
 
 SCRIPT_NAME="vps-init"
-VERSION="1.0.0"
+VERSION="1.0.1"
 REPO_SLUG="qinjing-arch/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
