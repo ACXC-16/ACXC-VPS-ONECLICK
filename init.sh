@@ -306,12 +306,6 @@ virt_type() {
   fi
 }
 
-is_container() {
-  case "$(virt_type)" in
-    lxc|lxc-libvirt|openvz|docker|podman|systemd-nspawn|wsl) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 in_list() { # $1=目标 $2=逗号/空格分隔的列表
   local needle="$1" hay="${2// /}"
@@ -1155,7 +1149,7 @@ step_access() {
     passwd_ask || rc=1
     if [ -n "$SSH_NEW_PORT" ]; then
       if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
-        SSH_PORT_CHANGED="$SSH_NEW_PORT"
+        mark_port_changed
       else
         rc=1
       fi
@@ -1209,7 +1203,7 @@ step_access() {
   printf '\n%s\n' "  ${C_BLD}第二步：修改 SSH 端口${C_RST}"
   if ssh_ask_port; then
     if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
-      SSH_PORT_CHANGED="$SSH_NEW_PORT"
+      mark_port_changed
     else
       rc=1
     fi
@@ -2160,6 +2154,17 @@ show_log_tail() { # 看最近的日志
     warn "日志文件不存在：${LOG_FILE:-未启用}"
   fi
   printf '\n'
+}
+
+# 端口跟当前一样就不算"改动"（避免误报"本次设置"）
+mark_port_changed() {
+  local cur=""
+  cur="$(trim "$(current_ssh_ports)")"
+  case " $cur " in
+    *" $SSH_NEW_PORT "*) return 0 ;;
+  esac
+  SSH_PORT_CHANGED="$SSH_NEW_PORT"
+  return 0
 }
 
 mark_no_change() { NO_CHANGE=1; return 0; }
