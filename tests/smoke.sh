@@ -286,6 +286,23 @@ rc="$(tui_case "$CUR_OUT" "$WORK/ans-e" "$WORK/init-fake.sh" --force --dry-run -
 check "取消输入后步骤失败" "1" "$rc"
 check_has "提示已取消输入" "$CUR_OUT" "已取消输入"
 
+echo "== 13) 图形界面挂掉时要自动降级为文字问答，不能静默退出 =="
+mkdir -p "$WORK/bin-fail"
+cat >"$WORK/bin-fail/whiptail" <<'MOCK'
+#!/usr/bin/env bash
+# 模拟"界面不可用"：任何调用都返回错误码 3
+exit 3
+MOCK
+chmod +x "$WORK/bin-fail/whiptail"
+CUR_OUT="$WORK/tui-fail.out"
+printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
+  PATH="$WORK/bin-fail:$PATH" VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
+    bash "$WORK/init-fake.sh" --force --dry-run --ui=whiptail >"$CUR_OUT" 2>&1
+rc=$?
+check "降级后仍然跑完" "0" "$rc"
+check_has "提示已降级" "$CUR_OUT" "图形界面出错，已自动切换为文字问答模式"
+check_has "降级后仍能正常执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
