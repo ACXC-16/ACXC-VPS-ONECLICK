@@ -1,0 +1,370 @@
+# ==================== 步骤 2：修改 SSH 端口 / root 密码 ====================
+# 说明：询问部分（ssh_ask_port / passwd_ask）和执行部分（ssh_apply_port /
+# passwd_apply）分开写，这样"默认设置"和"自定义"两条路都能复用同一套安全逻辑：
+# 备份 → 写入 → sshd -t/-T 校验 → 失败自动回滚。
+
+# 询问新端口 → SSH_NEW_PORT / SSH_KEEP_OLD（失败返回 1）
+ssh_ask_port() {
+  local old_ports="" new_port="" ssherr="" keep_old=0
+
+  SSH_NEW_PORT=""; SSH_KEEP_OLD=0; SSH_OLD_PORTS=""
+
+  if [ ! -f /etc/ssh/sshd_config ]; then
+    err "找不到 /etc/ssh/sshd_config，本机可能没安装 OpenSSH Server"
+    return 1
+  fi
+
+  old_ports="$(trim "$(current_ssh_ports)")"
+  if [ -z "$old_ports" ] && [ -n "$SSH_M_PORTS" ]; then
+    old_ports="$(trim "$SSH_M_PORTS")"
+    info "从上次留下的受管配置里读到端口：${old_ports}"
+  fi
+  SSH_OLD_PORTS="$old_ports"
+  info "当前生效的 SSH 端口：${old_ports:-未知}"
+
+  ssherr="$(sshd_test 2>&1)" || {
+    warn "当前 SSH 配置本身就有语法问题："
+    printf '%s\n' "$ssherr" | sed 's/^/    /'
+    if ! ask_yn "仍然继续修改？（脚本会先备份，可回滚）" n; then return 1; fi
+  }
+
+  new_port="$OPT_PORT"
+  if [ -n "$new_port" ]; then
+    if ! valid_port "$new_port"; then
+      err "端口不合法（应为 1-65535 的数字）：$new_port"
+      return 1
+    fi
+    info "使用命令行参数指定的端口：$new_port"
+  else
+    while :; do
+      if ! ask_value "请输入新的 SSH 端口" "$DEFAULT_SSH_PORT"; then return 1; fi
+      new_port="$REPLY"
+      if ! valid_port "$new_port"; then
+        warn "端口必须是 1-65535 之间的数字，请重新输入"
+        continue
+      fi
+      if [ "$new_port" -lt 1024 ]; then
+        warn "端口 $new_port 属于特权端口（1-1023），建议使用 1024 以上"
+      fi
+      case " $old_ports " in
+        *" $new_port "*) info "端口 $new_port 就是当前端口，将只做配置校验"; break ;;
+      esac
+      if port_in_use "$new_port"; then
+        warn "端口 $new_port 已被占用："
+        port_owner "$new_port"
+        if ! ask_yn "仍然要使用这个端口吗？" n; then continue; fi
+      fi
+      break
+    done
+  fi
+
+  if [ -n "$old_ports" ]; then
+    case " $old_ports " in
+      *" $new_port "*) ;;
+      *)
+        if ask_yn "过渡期是否继续保留原有端口（$(trim "$old_ports" | tr -s ' ')）？验证新端口可用后再关闭更安全" y; then
+          keep_old=1
+        fi ;;
+    esac
+  fi
+
+  SSH_NEW_PORT="$new_port"
+  SSH_KEEP_OLD="$keep_old"
+  return 0
+}
+
+# 应用端口：$1=新端口 [$2=是否保留旧端口 0/1]
+ssh_apply_port() {
+  local new_port="$1" keep_old="${2:-0}" old_ports="" p stamp bak other
+
+  old_ports="$SSH_OLD_PORTS"
+  [ -n "$old_ports" ] || old_ports="$(trim "$(current_ssh_ports)")"
+
+  # 改端口前的安全提示
+  printf '\n'
+  warn "改 SSH 端口前请先确认："
+  printf '  ① 云服务商控制台的「安全组 / 防火墙」先放行 %s/TCP\n' "$new_port"
+  printf '  ② 当前 SSH 会话不要断开（重启 sshd 不会踢掉已登录的连接）\n'
+  printf '  ③ 改完另开一个终端用 ssh -p %s root@<服务器IP> 验证，成功再关旧连接\n' "$new_port"
+  printf '  ④ 万一连不上：用云控制台 VNC 登录后执行脚本最后打印的回滚命令\n'
+  printf '\n'
+
+  # 本机防火墙放行
+  info "检查本机防火墙…"
+  if have ufw && ufw status 2>/dev/null | grep -q "^Status: active"; then
+    if run ufw allow "${new_port}/tcp" >/dev/null 2>&1; then
+      ok "ufw 已放行 ${new_port}/tcp"
+    else
+      warn "ufw 放行失败，请手动执行：ufw allow ${new_port}/tcp"
+    fi
+  elif have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
+    if run firewall-cmd --permanent --add-port="${new_port}/tcp" >/dev/null 2>&1 && run firewall-cmd --reload >/dev/null 2>&1; then
+      ok "firewalld 已放行 ${new_port}/tcp"
+    else
+      warn "firewalld 放行失败，请手动执行：firewall-cmd --permanent --add-port=${new_port}/tcp && firewall-cmd --reload"
+    fi
+  else
+    info "未检测到已启用的 ufw / firewalld，跳过本机防火墙放行。"
+    if have iptables && iptables -S 2>/dev/null | grep -qE '^-P (INPUT|FORWARD) DROP'; then
+      warn "iptables 默认策略是 DROP，请自行确认新端口没有被自建规则拦截。"
+    fi
+  fi
+
+  # 备份
+  stamp="$(date '+%Y%m%d-%H%M%S')"
+  bak="/root/vps-init-backup/${stamp}-ssh"
+  LAST_SSH_BACKUP="$bak"
+  run mkdir -p "$bak"
+  run cp -a /etc/ssh/sshd_config "${bak}/sshd_config"
+  if [ -d /etc/ssh/sshd_config.d ]; then
+    run cp -a /etc/ssh/sshd_config.d "${bak}/sshd_config.d"
+  fi
+  ok "已备份 SSH 配置到 $bak"
+
+  # 写入
+  SSH_M_PORTS="$new_port"
+  if [ "$keep_old" -eq 1 ]; then
+    # shellcheck disable=SC2086
+    for p in $old_ports; do
+      [ "$p" = "$new_port" ] && continue
+      SSH_M_PORTS="${SSH_M_PORTS} ${p}"
+    done
+  fi
+  info "写入 SSH 端口配置：$(trim "$SSH_M_PORTS" | tr -s ' ')"
+  if ! ssh_write_managed; then
+    err "写入 SSH 配置失败，已回滚"
+    ssh_restore_backup
+    return 1
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] 跳过 sshd 校验、重启与生效确认"
+    return 0
+  fi
+
+  # 校验生效
+  if ! ssh_config_ok "$new_port"; then
+    warn "drop-in 方式未生效，改为直接写入主配置再试一次…"
+    if ! ssh_write_inline "$(ssh_managed_block)" || ! ssh_config_ok "$new_port"; then
+      err "新端口未能生效，已回滚到修改前的配置"
+      ssh_restore_backup
+      return 1
+    fi
+  fi
+  other="$(grep -rlsE '^[[:space:]]*Port[[:space:]]' /etc/ssh/sshd_config.d/ 2>/dev/null | grep -v "^${MANAGED_SSHD_CONF}$" || true)"
+  if [ -n "$other" ]; then
+    warn "以下 drop-in 也设置了 Port，如端口异常请检查它们：$(printf '%s' "$other" | tr '\n' ' ')"
+  fi
+  ok "配置校验通过，sshd 生效端口：$(sshd_effective | awk '/^port /{printf "%s ", $2}')"
+
+  # 重启并确认监听
+  info "重启 SSH 服务…"
+  if ! restart_ssh; then
+    err "SSH 服务重启失败，正在回滚"
+    ssh_restore_backup
+    return 1
+  fi
+  sleep 1
+  if port_in_use "$new_port"; then
+    ok "已确认 SSH 正在监听新端口 ${new_port}"
+  else
+    warn "未检测到 ${new_port} 处于监听状态，请手动确认：ss -tlnp | grep ${new_port}"
+  fi
+  return 0
+}
+
+# 询问新密码 → PASSWD_NEW / PASSWD_GEN（PASSWD_NEW 为空 = 不改密码）
+passwd_ask() {
+  local pw="" gen=0 p1="" p2=""
+
+  PASSWD_NEW=""; PASSWD_GEN=0
+
+  warn "改密码请务必先确认：当前会话不要断开，最好用另一个终端保持登录状态。"
+  info "当前 root 密码状态：$(passwd -S root 2>/dev/null || printf '未知')"
+
+  if [ -n "$OPT_PASSWORD" ]; then
+    pw="$OPT_PASSWORD"
+    if [ "${#pw}" -lt 8 ]; then warn "--password 只有 ${#pw} 位，建议至少 8 位"; fi
+    info "使用命令行 --password 指定的密码（注意：它可能留在 shell 历史里，稍后建议执行 history -c 或删除该行）"
+  elif [ "$GEN_PASSWORD" -eq 1 ]; then
+    gen=1
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    # 关键安全设计：无人值守时绝不偷偷改密码，否则你就拿到了一个自己不知道的密码
+    warn "无人值守模式（--yes）不会自动修改 root 密码 —— 避免生成一个你不知道的密码导致自己失联。"
+    info "确实要改的话请显式指定：--password '你的新密码'  或  --gen-password（生成后会把密码显示出来）"
+    return 0
+  elif ask_yn "是否自动生成随机强密码？（选 N 则手动输入）" n; then
+    gen=1
+  fi
+
+  if [ "$gen" -eq 1 ]; then
+    pw="$(gen_password 24)" || { err "生成随机密码失败"; return 1; }
+    # 先生成、先给你看，确认记下来之后才真正生效
+    printf '\n%s\n' "${C_BLD}${C_YEL}  ★ 即将设置的 root 随机密码（只显示这一次）：${C_RST}"
+    printf '%s\n\n' "${C_BLD}      ${pw}${C_RST}"
+    printf '  %s\n' "脚本不会把它写进日志，也只显示这一次；请先复制保存。"
+    if ! ask_yn "已经记下这个密码了，确认现在修改 root 密码？" y; then
+      info "已取消：root 密码保持不变。"
+      pw=""
+      return 0
+    fi
+  elif [ -z "$OPT_PASSWORD" ]; then
+    while :; do
+      if ! _prompt_secret "  请输入新的 root 密码（不回显，至少 8 位）: "; then
+        err "读取密码失败"
+        return 1
+      fi
+      p1="$REPLY"
+      if [ -z "$p1" ]; then warn "密码不能为空"; continue; fi
+      case "$p1" in
+        *[$'\n\r']*) warn "密码不能包含换行符"; continue ;;
+      esac
+      if [ "${#p1}" -lt 8 ]; then
+        warn "密码长度至少 8 位（当前 ${#p1} 位），请重新输入"
+        continue
+      fi
+      if ! _prompt_secret "  请再次输入以确认: "; then
+        err "读取密码失败"
+        return 1
+      fi
+      p2="$REPLY"
+      if [ "$p1" != "$p2" ]; then warn "两次输入不一致，请重新输入"; continue; fi
+      break
+    done
+    pw="$p1"
+    p1=""; p2=""
+  fi
+
+  PASSWD_NEW="$pw"
+  PASSWD_GEN="$gen"
+  return 0
+}
+
+# 应用密码：$1=新密码 [$2=是否随机生成 0/1]
+passwd_apply() {
+  local pw="$1" gen="${2:-0}" eff="" prl="" pa=""
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s\n' "${C_DIM}  [dry-run] 将执行: printf 'root:<新密码>' | chpasswd${C_RST}"
+    if [ "$gen" -eq 1 ]; then info "[dry-run] 本次随机密码：$pw"; fi
+    pw=""
+    return 0
+  fi
+
+  if printf 'root:%s\n' "$pw" | chpasswd; then
+    ok "root 密码已修改成功"
+  else
+    err "chpasswd 执行失败，密码未修改"
+    pw=""
+    return 1
+  fi
+
+  if [ "$gen" -eq 1 ]; then
+    NEW_ROOT_PASSWORD="$pw"   # 最后汇总时再显示一次，防止中途刷屏看不到
+    printf '\n%s\n' "${C_BLD}${C_YEL}  ★ 新生成的 root 密码（只显示这一次，请立即保存）：${C_RST}"
+    printf '%s\n\n' "${C_BLD}      $pw${C_RST}"
+  else
+    info "密码已更新（脚本不会把明文密码写进日志）。"
+  fi
+  pw=""
+
+  info "密码状态：$(passwd -S root 2>/dev/null || printf '未知')"
+
+  # 检查 SSH 是否允许 root 用密码登录
+  eff="$(sshd_effective)" || true
+  if [ -z "$eff" ]; then
+    warn "读不到 SSH 生效配置，跳过「登录方式」检查。"
+    return 0
+  fi
+  prl="$(printf '%s\n' "$eff" | awk '/^permitrootlogin /{print $2}')"
+  pa="$(printf '%s\n' "$eff" | awk '/^passwordauthentication /{print $2}')"
+  info "当前 SSH 设置：PermitRootLogin=${prl:-未知}，PasswordAuthentication=${pa:-未知}"
+  if [ "$prl" = "yes" ] && [ "$pa" = "yes" ]; then
+    ok "SSH 已允许 root 用密码登录，可以直接用新密码登录。"
+    return 0
+  fi
+
+  warn "当前 SSH 不允许 root 用密码登录（云镜像常见默认设置），只改密码仍然无法用密码登录 SSH。"
+  if ! ask_yn "是否同时开启「root + 密码」登录 SSH？（安全性会下降，建议优先用 SSH 密钥）" n; then
+    info "保持现状，请继续使用密钥登录。"
+    return 0
+  fi
+
+  SSH_M_PERMIT_ROOT_LOGIN="yes"
+  SSH_M_PASSWORD_AUTH="yes"
+  if ! ssh_write_managed; then
+    err "写入 SSH 登录配置失败"
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] 跳过 sshd 校验与重启"
+    return 0
+  fi
+  if ! ssh_config_ok; then
+    err "SSH 配置校验失败，请检查 /etc/ssh/sshd_config.d/"
+    return 1
+  fi
+  if ! restart_ssh; then
+    err "SSH 服务重启失败，请手动执行: systemctl restart ssh"
+    return 1
+  fi
+  eff="$(sshd_effective)" || true
+  ok "SSH 登录设置已更新：$(printf '%s\n' "$eff" | awk '/^permitrootlogin |^passwordauthentication /{printf "%s=%s ", $1, $2}')"
+  warn "当前会话不会断开；请另开终端验证能登录后，再考虑关闭旧连接。"
+  return 0
+}
+
+# 菜单里的第 2 项：默认设置 / 自定义 / 不修改
+step_access() {
+  local rc=0 choice=""
+
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    ssh_ask_port || rc=1
+    passwd_ask || rc=1
+  else
+    printf '\n  %s\n' "${C_BLD}当前：SSH 端口 $(trim "$(current_ssh_ports)") · root 密码 $(status_passwd)${C_RST}"
+    printf '  %s\n' "1) 使用默认设置（SSH 端口 ${DEFAULT_SSH_PORT}，root 密码 ${DEFAULT_ROOT_PASSWORD}）"
+    printf '  %s\n' "2) 自定义（分别输入端口和密码）"
+    printf '  %s\n' "0) 不修改，返回"
+    if ! menu_read_choice; then return 1; fi
+    choice="$REPLY"
+
+    case "$choice" in
+      0|q|Q)
+        info "已返回：SSH 端口和 root 密码都保持原样。"
+        return 0 ;;
+      1)
+        SSH_OLD_PORTS="$(trim "$(current_ssh_ports)")"
+        SSH_NEW_PORT="$DEFAULT_SSH_PORT"
+        SSH_KEEP_OLD=1
+        PASSWD_NEW="$DEFAULT_ROOT_PASSWORD"
+        PASSWD_GEN=0
+        warn "使用默认设置：SSH 端口 ${DEFAULT_SSH_PORT}，root 密码 ${DEFAULT_ROOT_PASSWORD}"
+        info "提醒：默认密码容易被猜到，登录成功后建议尽快改成你自己的强密码（本菜单选 2 自定义）。"
+        ;;
+      2)
+        if ! ssh_ask_port; then
+          warn "跳过 SSH 端口修改（读不到 SSH 配置或已取消），继续处理 root 密码"
+          SSH_NEW_PORT=""
+        fi
+        passwd_ask || return 1
+        ;;
+      *)
+        warn "无效的选择：$choice（请输入 0 / 1 / 2）"
+        return 1 ;;
+    esac
+  fi
+
+  if [ -n "$SSH_NEW_PORT" ]; then
+    ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD" || rc=1
+  else
+    info "SSH 端口保持不变。"
+  fi
+  if [ -n "$PASSWD_NEW" ]; then
+    passwd_apply "$PASSWD_NEW" "$PASSWD_GEN" || rc=1
+  else
+    info "root 密码保持不变。"
+  fi
+  return "$rc"
+}
+
