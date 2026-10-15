@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
-#  版本: 1.0.7
+#  VPS新机一键脚本-acxc16 —— Ubuntu / Debian VPS 初始化交互式脚本
+#  版本: 1.0.0
 #  仓库: https://github.com/ACXC-16/VPS-init
 #  许可: MIT
 # -----------------------------------------------------------------------------
@@ -28,8 +28,8 @@
 set -u
 set -o pipefail
 
-SCRIPT_NAME="vps-init"
-VERSION="1.0.7"
+SCRIPT_NAME="VPS新机一键脚本-acxc16"
+VERSION="1.0.0"
 REPO_SLUG="ACXC-16/VPS-init"
 
 DEFAULT_SSH_PORT="52052"
@@ -271,7 +271,7 @@ ui_msg() { # $1=标题 $2=内容
 ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动键也不会卡住
   local rc=0 saved="$UI_TIMEOUT"
   UI_TIMEOUT="$UI_SELFTEST_TIMEOUT"
-  _ui_run --title "vps-init 界面自检" \
+  _ui_run --title "VPS新机一键脚本-acxc16 界面自检" \
     --yesno "接下来会用这样的方框来操作。\n\n操作方式：用 Tab 或 ← → 切换按钮，回车确认。\n（直接敲 y / n 没用；如果方向键在方框里变成 ^[[C 这种乱码，\n说明你的终端不支持，请直接选 <No> 或什么都不按）\n\n  <Yes>  用图形界面\n  <No>   改用编号菜单（推荐，直接输入数字）\n\n什么都不按的话，${UI_SELFTEST_TIMEOUT} 秒后会自动改用编号菜单。" \
     18 74 || rc=$?
   UI_TIMEOUT="$saved"
@@ -419,7 +419,7 @@ _prompt_secret() { # $1=提示语 → REPLY（不回显）
   local p="$1" line=""
   if [ "$UI_BACKEND" = "whiptail" ]; then
     local rc=0
-    _ui_run --title "vps-init" --passwordbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" || rc=$?
+    _ui_run --title "$SCRIPT_NAME" --passwordbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" || rc=$?
     case "$rc" in
       0) return 0 ;;
       1|255) return 1 ;;
@@ -454,7 +454,7 @@ ask_yn() {
     local rc=0 extra=""
     [ "$def" = n ] && extra="--defaultno"
     # shellcheck disable=SC2086
-    _ui_run --title "vps-init" $extra --yesno "$(printf '%b' "$q")
+    _ui_run --title "$SCRIPT_NAME" $extra --yesno "$(printf '%b' "$q")
 
 （Tab 或 ← → 切换按钮，回车确认）" "$UI_H" "$UI_W" || rc=$?
     case "$rc" in
@@ -494,7 +494,7 @@ ask_value() {
     while [ "$tries" -lt 20 ]; do
       tries=$((tries + 1))
       rc=0
-      _ui_run --title "vps-init" --inputbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" "$def" || rc=$?
+      _ui_run --title "$SCRIPT_NAME" --inputbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" "$def" || rc=$?
       if [ "$rc" -eq 0 ]; then
         if [ -n "$REPLY" ]; then return 0; fi
         if [ -n "$def" ]; then REPLY="$def"; return 0; fi
@@ -1536,7 +1536,7 @@ build_plan_tui() {
     fi
   done
 
-  _ui_run --title "vps-init · 选择要执行的步骤" --separate-output \
+  _ui_run --title "$SCRIPT_NAME · 选择要执行的步骤" --separate-output \
     --checklist "空格 = 勾选/取消    方向键 = 移动    Tab = 切到 <Ok>    回车 = 确认\n\n标 ON 的是推荐默认项，不想做的取消勾选即可。" \
     "$h" "$UI_W" "$listh" "${args[@]}" || rc=$?
   if [ "$rc" -eq 1 ] || [ "$rc" -eq 255 ]; then
@@ -1907,7 +1907,7 @@ show_system_info() {
 # ============================== 参数与主流程 ================================
 usage() {
   cat <<'EOF'
-vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
+VPS新机一键脚本-acxc16 —— Ubuntu / Debian VPS 初始化交互式脚本
 
 用法:
   sudo bash init.sh [选项]

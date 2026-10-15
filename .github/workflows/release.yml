@@ -28,8 +28,8 @@ jobs:
 
       - name: 准备发布文件（额外留一份带版本号的副本）
         run: |
-          cp init.sh "vps-init-${GITHUB_REF_NAME}.sh"
-          sha256sum init.sh "vps-init-${GITHUB_REF_NAME}.sh" | tee SHA256SUMS.txt
+          cp init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh"
+          sha256sum init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh" | tee SHA256SUMS.txt
 
       - name: 创建 GitHub Release
         env:
@@ -37,7 +37,7 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             init.sh \
-            "vps-init-${GITHUB_REF_NAME}.sh" \
+            "VPS-acxc16-${GITHUB_REF_NAME}.sh" \
             SHA256SUMS.txt \
-            --title "vps-init ${GITHUB_REF_NAME}" \
+            --title "VPS新机一键脚本-acxc16 ${GITHUB_REF_NAME}" \
             --generate-notes
