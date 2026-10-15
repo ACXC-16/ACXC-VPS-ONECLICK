@@ -126,7 +126,7 @@ CUR_OUT="$WORK/d.out"
 rc="$(printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
 check_has "只执行 tuning" "$CUR_OUT" "时区 / Swap / BBR 网络加速"
-check_has "跳过了 sysupdate" "$CUR_OUT" "已跳过：更新系统软件包与内核/驱动"
+check_has "跳过了 sysupdate" "$CUR_OUT" "已跳过：只更新内核 / 驱动 / 固件"
 
 echo "== 8) 步骤失败要如实汇总并返回 1 =="
 CUR_OUT="$WORK/e.out"
@@ -166,6 +166,14 @@ EOF
 bash "$WORK/unit.sh" >"$CUR_OUT" 2>&1
 check_has "回读端口列表" "$CUR_OUT" "PORTS=[52052 22]"
 check_has "回读 PermitRootLogin" "$CUR_OUT" "PRL=[yes]"
+
+echo "== 11) sysupdate 默认只动内核/驱动，其它软件包不动 =="
+CUR_OUT="$WORK/k.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
+check "退出码" "0" "$rc"
+check_has "明确只升级内核/驱动/固件" "$CUR_OUT" "只升级内核 / 驱动 / 固件"
+check_has "全量升级默认不执行" "$CUR_OUT" "保持不动：本次不升级其它软件包"
+check_has "清理默认不执行" "$CUR_OUT" "是否清理不再需要的依赖包（apt autoremove --purge）？ -> N"
 
 echo
 if [ "$FAIL" -gt 0 ]; then
