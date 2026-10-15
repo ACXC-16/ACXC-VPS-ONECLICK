@@ -66,7 +66,6 @@ SSH_M_PERMIT_ROOT_LOGIN=""
 SSH_M_PASSWORD_AUTH=""
 
 declare -a PLAN_SLUGS=() PLAN_TITLES=() PLAN_FUNCS=() PLAN_TOOLS=()
-KERNEL_STATUS_CACHE=""
 declare -a RESULT_NAMES=() RESULT_STATES=()
 
 # ============================== 步骤注册表 ==================================
@@ -76,8 +75,7 @@ STEPS=(
   "sysupdate|更新内核 / 驱动 / 固件|y|step_sysupdate"
   "ssh-port|修改 SSH 端口（默认 ${DEFAULT_SSH_PORT}）|y|step_ssh_port"
   "root-passwd|修改 root 密码|y|step_root_password"
-  "tools|常用工具 / fail2ban|n|step_tools"
-  "tuning|时区 / Swap / BBR 网络加速|n|step_tuning"
+  "extras|安装常用工具 / BBR网络加速 / Swap|n|step_extras"
 )
 
 # 快捷命令：安装成 acxc，以后直接输入 acxc 就能打开
@@ -1093,56 +1091,56 @@ create_swap() {
   return 0
 }
 
-step_tuning() {
-  local rc=0 tz="" mem_mb="" existing_swap="" def_swap="" swap_mb="" befor_cc=""
-
-  # ---------- 时区 ----------
-  if ask_yn "设置系统时区（默认 Asia/Shanghai）？" y; then
-    tz="Asia/Shanghai"
-    if [ "$ASSUME_YES" -eq 0 ]; then
-      if ask_value "请输入时区" "Asia/Shanghai"; then tz="$REPLY"; fi
-    fi
-    case "$tz" in
-      *[!A-Za-z0-9_/+:-]*) warn "时区格式不合法：$tz，已跳过" ; tz="" ;;
-    esac
-    if [ -n "$tz" ]; then
-      if [ ! -f "/usr/share/zoneinfo/$tz" ]; then
-        warn "时区 $tz 不存在，保持原样（当前：$(date +%Z)）"
-      else
-        if have timedatectl && run timedatectl set-timezone "$tz"; then
-          :
-        else
-          warn "timedatectl 不可用或执行失败，改用直接写文件的方式设置时区"
-          run ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || rc=1
-          run sh -c "printf '%s\\n' '$tz' > /etc/timezone" || true
-        fi
-        if [ "$DRY_RUN" -eq 0 ]; then ok "时区已设置为 $tz（当前时间：$(date '+%F %T %Z')）"; fi
-      fi
-    fi
+# ---------- 时区（供"常用工具 / BBR网络加速 / Swap"里调用） ----------
+set_timezone() {
+  local tz="Asia/Shanghai" rc=0
+  if [ "$ASSUME_YES" -eq 0 ]; then
+    if ask_value "请输入时区" "Asia/Shanghai"; then tz="$REPLY"; fi
   fi
+  case "$tz" in
+    *[!A-Za-z0-9_/+:-]*) warn "时区格式不合法：$tz"; return 1 ;;
+  esac
+  if [ ! -f "/usr/share/zoneinfo/$tz" ]; then
+    warn "时区 $tz 不存在，保持原样（当前：$(date +%Z)）"
+    return 1
+  fi
+  if have timedatectl && run timedatectl set-timezone "$tz"; then
+    :
+  else
+    warn "timedatectl 不可用，改用直接写文件的方式"
+    run ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || rc=1
+    run sh -c "printf '%s\\n' '$tz' > /etc/timezone" || true
+  fi
+  if [ "$DRY_RUN" -eq 0 ]; then ok "时区已设置为 $tz（当前：$(date '+%F %T %Z')）"; fi
+  return "$rc"
+}
 
-  # ---------- Swap ----------
+# ---------- Swap ----------
+setup_swap() {
+  local mem_mb="" existing_swap="" def_swap="" swap_mb=""
   mem_mb="$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
   existing_swap="$(awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
   [ -n "$mem_mb" ] || mem_mb=0
   [ -n "$existing_swap" ] || existing_swap=0
 
   if [ "$existing_swap" -gt 0 ]; then
-    info "已存在 Swap（${existing_swap}MB），跳过创建。"
-  elif ask_yn "是否创建 Swap 交换文件？（当前内存 ${mem_mb}MB）" y; then
-    if [ "$mem_mb" -le 4096 ]; then def_swap="2048"; else def_swap="4096"; fi
-    swap_mb="$def_swap"
-    if [ "$ASSUME_YES" -eq 0 ]; then
-      if ask_value "Swap 大小（MB）" "$def_swap"; then swap_mb="$REPLY"; fi
-    fi
-    case "$swap_mb" in
-      ''|*[!0-9]*) warn "Swap 大小无效，改用默认值 ${def_swap}MB"; swap_mb="$def_swap" ;;
-    esac
-    create_swap "$swap_mb" || rc=1
+    ok "已经存在 Swap（${existing_swap}MB），无需创建。"
+    return 0
   fi
+  if [ "$mem_mb" -le 4096 ]; then def_swap="2048"; else def_swap="4096"; fi
+  swap_mb="$def_swap"
+  if [ "$ASSUME_YES" -eq 0 ]; then
+    if ask_value "Swap 大小（MB）" "$def_swap"; then swap_mb="$REPLY"; fi
+  fi
+  case "$swap_mb" in
+    ''|*[!0-9]*) warn "Swap 大小无效，改用默认值 ${def_swap}MB"; swap_mb="$def_swap" ;;
+  esac
+  create_swap "$swap_mb"
+}
 
-  # ---------- BBR ----------
-  local kver kmaj kmin
+# ---------- BBR ----------
+enable_bbr() {
+  local kver="" kmaj=0 kmin=0 cc="" qd="" befor_cc=""
   kver="$(uname -r)"
   kmaj="${kver%%.*}"
   kmin="${kver#*.}"; kmin="${kmin%%.*}"
@@ -1151,49 +1149,50 @@ step_tuning() {
 
   if [ "$kmaj" -lt 4 ] || { [ "$kmaj" -eq 4 ] && [ "$kmin" -lt 9 ]; }; then
     warn "内核 ${kver} 低于 4.9，不支持 BBR，已跳过。"
-  elif ask_yn "是否开启 TCP BBR 拥塞控制（网络加速）？" y; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-      printf '%s\n' "${C_DIM}  [dry-run] 将写入 ${SYSCTL_BBR_CONF} 并执行 sysctl --system${C_RST}"
-    else
-      befor_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
-      if ! sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr; then
-        warn "内核未列出 bbr 模块，尝试加载…"
-        modprobe tcp_bbr 2>/dev/null || warn "modprobe tcp_bbr 失败（容器/共享内核环境属正常）"
-      fi
-      cat >"$SYSCTL_BBR_CONF" <<'EOF'
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s\n' "${C_DIM}  [dry-run] 将写入 ${SYSCTL_BBR_CONF} 并执行 sysctl --system${C_RST}"
+    return 0
+  fi
+  befor_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+  if ! sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr; then
+    warn "内核未列出 bbr 模块，尝试加载…"
+    modprobe tcp_bbr 2>/dev/null || warn "modprobe tcp_bbr 失败（容器/共享内核环境属正常）"
+  fi
+  cat >"$SYSCTL_BBR_CONF" <<'EOF'
 # 由 vps-init 生成：开启 TCP BBR
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 EOF
-      sysctl --system >/dev/null 2>&1 || true
-      local cc="" qd=""
-      cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
-      qd="$(sysctl -n net.core.default_qdisc 2>/dev/null)"
-      if [ "$cc" = "bbr" ]; then
-        ok "BBR 已开启（拥塞控制：${cc}，队列：${qd:-未知}，调整前为：${befor_cc:-未知}）"
-      else
-        warn "BBR 未生效（当前：${cc:-未知}）。OpenVZ/LXC 等共享内核环境通常不支持，需要宿主机开启。"
-      fi
-    fi
+  sysctl --system >/dev/null 2>&1 || true
+  cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+  qd="$(sysctl -n net.core.default_qdisc 2>/dev/null)"
+  if [ "$cc" = "bbr" ]; then
+    ok "BBR 已开启（拥塞控制：${cc}，队列：${qd:-未知}，调整前：${befor_cc:-未知}）"
+  else
+    warn "BBR 未生效（当前：${cc:-未知}）。OpenVZ/LXC 等共享内核环境通常不支持。"
+    return 1
   fi
-
-  return "$rc"
+  return 0
 }
-
-# ==================== 步骤 4：常用工具 / fail2ban ==========================
-# 每项都可以单独选，[推荐] 的项在"直接回车"时会默认安装
+# ============ 步骤 4：常用工具 / BBR网络加速 / Swap =======================
+# 每项都可以单独选，[推荐] 的项在"直接回车"时会默认处理
 TOOL_ITEMS=(
-  "curl wget ca-certificates gnupg|下载 / 证书 / 密钥等基础组件|y"
+  "curl wget ca-certificates gnupg|基础组件（下载 / 证书 / 密钥）|y"
   "vim nano|文本编辑器|y"
   "htop tmux lsof|进程 / 会话 / 文件占用查看|y"
   "git rsync unzip zip|同步与压缩打包|y"
   "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|y"
   "bash-completion|命令自动补全（Tab 补全更好用）|y"
   "net-tools dnsutils mtr-tiny traceroute|网络诊断（排障用）|n"
-  "fail2ban|防 SSH 暴力破解（选中会自动装好并配置）|n"
+  "fail2ban|fail2ban 防 SSH 暴力破解|n"
+  "timezone|设置时区（默认 Asia/Shanghai）|y"
+  "swap|创建 Swap 交换文件|y"
+  "bbr|开启 BBR 网络加速|y"
 )
 
-step_tools() {
+step_extras() {
   local i=0 sel="" raw="" line="" tok="" ok=1 rcp=0
   local -a g_pkgs=() g_title=() g_rec=()
   local entry pkgs title rec
@@ -1248,15 +1247,25 @@ step_tools() {
     return 0
   fi
 
-  # 安装选中的软件包（fail2ban 交给它自己的步骤处理）
+  # 处理选中的项目：软件包 → fail2ban → 时区 / Swap / BBR
   for i in "${PLAN_TOOLS[@]}"; do
     pkgs="${g_pkgs[$i]}"
     title="${g_title[$i]}"
-    if [ "$pkgs" = "fail2ban" ]; then
-      info "安装配置 fail2ban…"
-      step_fail2ban || rcp=1
-      continue
-    fi
+    case "$pkgs" in
+      fail2ban)
+        info "安装配置 fail2ban…"
+        step_fail2ban || rcp=1
+        continue ;;
+      timezone)
+        set_timezone || rcp=1
+        continue ;;
+      swap)
+        setup_swap || rcp=1
+        continue ;;
+      bbr)
+        enable_bbr || rcp=1
+        continue ;;
+    esac
     info "安装：${title}（$(printf '%s' "$pkgs" | tr -s ' ')）"
     # shellcheck disable=SC2086
     if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
@@ -1287,7 +1296,7 @@ list_steps() {
     IFS='|' read -r slug title def fn <<<"$entry"
     printf '  %-13s %-40s 默认: %s\n' "$slug" "$title" "$def"
   done
-  printf '\n用法：--only sysupdate,ssh-port   /   --skip tools\n'
+  printf '\n用法：--only sysupdate,ssh-port   /   --skip extras\n'
 }
 
 # 等用户按回车（看完长输出后继续）
@@ -1296,9 +1305,6 @@ pause_enter() {
   _prompt_line "  " "" >/dev/null 2>&1 || true
   return 0
 }
-
-# 内核状态那行要跑 apt，比较慢：算一次缓存起来；执行过操作后再失效重算
-invalidate_status() { KERNEL_STATUS_CACHE=""; return 0; }
 
 # 快捷命令：生成 /usr/local/bin/acxc，以后直接输入 acxc 就能打开
 shortcut_body() {
@@ -1373,26 +1379,36 @@ plan_add() { # $1=步骤标识 → 追加到执行计划
 }
 
 # ============================== 状态表 ======================================
-# 每个步骤在本机当前的真实状态，风格参考常见管理面板（项目 / 状态）
-status_kernel() {
-  local k="" n="" out=""
-  if [ -n "$KERNEL_STATUS_CACHE" ]; then
-    printf '%s' "$KERNEL_STATUS_CACHE"
-    return 0
-  fi
-  k="$(uname -r)"
-  if have apt; then
-    n="$(upgradable_kernel_pkgs 2>/dev/null | grep -c . || true)"
-    case "$n" in ''|*[!0-9]*) n=0 ;; esac
-    if [ "$n" -gt 0 ]; then
-      out="内核 ${k}（有 ${n} 个驱动/内核包可升级）"
-    else
-      out="内核 ${k}（已是最新）"
-    fi
+# 性能说明：状态表整块缓存，只有执行过操作才重算；每行的状态一律用"本地快速命令"
+# （dpkg-query / /proc / passwd -S / systemctl），不跑 apt 这类慢命令，所以菜单不卡。
+STATUS_TABLE_CACHE=""
+STATUS_LABELS=()
+
+tools_installed_count() { # "9/10"
+  local pkg="" n=0 total=0
+  for pkg in curl wget vim htop tmux git rsync jq unzip lsof; do
+    total=$((total + 1))
+    if have "$pkg"; then n=$((n + 1)); fi
+  done
+  printf '%s/%s' "$n" "$total"
+}
+
+swap_total_mb() {
+  local mb=""
+  mb="$(awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+  case "$mb" in ''|*[!0-9]*) mb=0 ;; esac
+  printf '%s' "$mb"
+}
+
+status_kernel() { # 只用本地命令：当前内核 + 是否已装了更新的内核（需重启）
+  local running="" newest="" out=""
+  running="$(uname -r)"
+  newest="$(installed_kernel_pkgs 2>/dev/null | grep -E '^linux-image-[0-9]' | sed -e 's|^linux-image-||' | sort -V | tail -n 1)"
+  if [ -n "$newest" ] && [ "$newest" != "$running" ]; then
+    out="当前 ${running}，已装 ${newest}（重启后生效）"
   else
-    out="内核 ${k}"
+    out="当前 ${running}（已是最新）"
   fi
-  KERNEL_STATUS_CACHE="$out"
   printf '%s' "$out"
 }
 
@@ -1413,45 +1429,30 @@ status_passwd() {
   st="$(printf '%s' "$line" | awk '{print $2}')"
   d="$(printf '%s' "$line" | awk '{print $3}')"
   case "$st" in
-    P) if [ -n "$d" ]; then printf '已设置密码（%s）' "$d"; else printf '已设置密码'; fi ;;
+    P) if [ -n "$d" ]; then printf '已设置（%s）' "$d"; else printf '已设置'; fi ;;
     L) printf '已锁定' ;;
-    NP) printf '未设置密码' ;;
+    NP) printf '未设置' ;;
     '') printf '未知' ;;
     *) printf '状态 %s' "$st" ;;
   esac
 }
 
-status_fail2ban() {
-  if ! have fail2ban-client; then
-    printf '未安装'
-    return 0
+status_extras() { # 工具 / fail2ban / Swap / BBR 一行说完
+  local out="" f2b="" sw="" cc=""
+  out="工具 $(tools_installed_count)"
+  if have fail2ban-client; then
+    if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
+      f2b="运行中"
+    else
+      f2b="已装未运行"
+    fi
+    out="${out} · fail2ban ${f2b}"
   fi
-  if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
-    printf '已安装，运行中'
-  else
-    printf '已安装，未运行'
-  fi
-}
-
-status_tuning() {
-  local tz="" sw="" cc=""
-  tz="$(date +%Z 2>/dev/null)"
-  sw="$(awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+  sw="$(swap_total_mb)"
+  if [ "$sw" -gt 0 ]; then out="${out} · Swap ${sw}MB"; fi
   cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
-  if [ -n "${sw:-}" ] && [ "$sw" -gt 0 ]; then
-    printf '时区 %s · Swap %sMB · TCP %s' "${tz:-?}" "$sw" "${cc:-?}"
-  else
-    printf '时区 %s · 无 Swap · TCP %s' "${tz:-?}" "${cc:-?}"
-  fi
-}
-
-status_tools() {
-  local pkg="" have_n=0 total=0
-  for pkg in curl wget vim htop tmux git rsync jq unzip lsof; do
-    total=$((total + 1))
-    if have "$pkg"; then have_n=$((have_n + 1)); fi
-  done
-  printf '常用工具 %s/%s 已安装' "$have_n" "$total"
+  if [ "$cc" = "bbr" ]; then out="${out} · BBR 已开启"; else out="${out} · BBR 未开启"; fi
+  printf '%s' "$out"
 }
 
 status_of() { # $1=步骤标识 → 输出状态文字
@@ -1459,31 +1460,58 @@ status_of() { # $1=步骤标识 → 输出状态文字
     sysupdate)   status_kernel ;;
     ssh-port)    status_ssh ;;
     root-passwd) status_passwd ;;
-    fail2ban)    status_fail2ban ;;
-    tuning)      status_tuning ;;
-    tools)       status_tools ;;
+    extras)      status_extras ;;
     *)           printf '—' ;;
   esac
 }
 
 show_status_table() {
-  local entry slug title def fn line=""
-  printf '\n%s\n' "${C_BLD}${C_CYN}  ${SCRIPT_NAME}  v${SCRIPT_VERSION}${C_RST}"
-  printf '  %s\n' "${C_DIM}适用：Ubuntu / Debian    仓库：https://github.com/${REPO_SLUG}${C_RST}"
-  printf '\n'
-  printf '  %-34s %s\n' "项目" "状态"
-  printf '  %s\n' "────────────────────────────────── ──────────────────────────────"
-  local pad=0
+  local entry slug title def fn line="" out="" pad=0 i=0 header="" sep=""
+
+  if [ -n "$STATUS_TABLE_CACHE" ]; then
+    printf '%s' "$STATUS_TABLE_CACHE"
+    return 0
+  fi
+
+  # 行名对齐宽度只算一次（disp_width 会起子进程，算一次就够）
+  if [ "${#STATUS_LABELS[@]}" -eq 0 ]; then
+    for entry in "${STEPS[@]}"; do
+      IFS='|' read -r slug title def fn <<<"$entry"
+      pad=$((32 - $(disp_width "$title")))
+      [ "$pad" -lt 1 ] && pad=1
+      STATUS_LABELS+=("$(printf '%s%*s' "$title" "$pad" "")")
+    done
+  fi
+
+  printf -v header '\n  %s  v%s\n' "${C_BLD}${C_CYN}${SCRIPT_NAME}${C_RST}" "$SCRIPT_VERSION"
+  printf -v sep '  %s\n' "──────────────────────────────────── ────────────────────────"
+  out="${header}"
+  out="${out}  ${C_BLD}项目                                 状态${C_RST}
+"
+  out="${out}${sep}"
+  i=0
   for entry in "${STEPS[@]}"; do
     IFS='|' read -r slug title def fn <<<"$entry"
     line="$(status_of "$slug")"
-    pad=$((30 - $(disp_width "$title")))
-    [ "$pad" -lt 1 ] && pad=1
-    printf '  %s%*s  %s\n' "$title" "$pad" "" "$line"
+    printf -v pad_line '  %s  %s\n' "${STATUS_LABELS[$i]}" "$line"
+    out="${out}${pad_line}"
+    i=$((i + 1))
   done
-  printf '\n'
-}
+  out="${out}
+"
 
+  STATUS_TABLE_CACHE="$out"
+  printf '%s' "$out"
+}
+invalidate_status() { STATUS_TABLE_CACHE=""; return 0; }
+
+# 清屏并回到最上面（只在真正的终端里清，测试/管道下只换行）
+refresh_screen() {
+  if [ "$TTY_OK" -eq 1 ] && [ -n "${TERM:-}" ]; then
+    clear 2>/dev/null || printf '\033[2J\033[H'
+  fi
+  return 0
+}
 show_log_tail() { # 看最近的日志
   local n="${1:-40}"
   if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
@@ -1501,16 +1529,14 @@ show_menu() {
   printf '  %s\n' "1) 更新内核 / 驱动 / 固件"
   printf '  %s\n' "2) 修改 SSH 端口"
   printf '  %s\n' "3) 修改 root 密码"
-  printf '  %s\n' "4) 安装常用工具 / fail2ban"
-  printf '  %s\n' "5) 时区 / Swap / BBR 网络加速"
-  printf '  %s\n' "6) 查看系统信息"
-  printf '  %s\n' "7) 查看运行日志"
-  printf '  %s\n' "8) 安装 / 更新快捷命令 ${SHORTCUT_NAME}"
-  printf '  %s\n' "9) 全部按默认执行（1 2 3）"
+  printf '  %s\n' "4) 安装常用工具 / BBR网络加速 / Swap"
+  printf '  %s\n' "5) 查看系统信息"
+  printf '  %s\n' "6) 查看运行日志"
+  printf '  %s\n' "7) 更新脚本"
+  printf '  %s\n' "8) 全部按默认执行（1 2 3）"
   printf '  %s\n' "0) 退出"
   printf '\n'
 }
-
 menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
   local raw="" cleaned=""
   while :; do
@@ -1532,9 +1558,10 @@ menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
   done
 }
 
-# 菜单循环：选一项 → 执行 → 回到菜单，直到选 0 退出
+# 菜单循环：每次都清屏重画（菜单回到最上面）→ 选一项 → 执行 → 回来，直到选 0 退出
 menu_loop() {
   local choice="" n=0 entry_slug=""
+  refresh_screen
   while :; do
     show_status_table
     show_menu
@@ -1546,7 +1573,7 @@ menu_loop() {
     case "$choice" in
       0|q|Q|exit|quit)
         break ;;
-      1|2|3|4|5)
+      1|2|3|4)
         n="$choice"
         PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
         if plan_add "$(step_slug_by_index "$n")"; then
@@ -1556,22 +1583,25 @@ menu_loop() {
         else
           warn "无效的选择：$choice"
         fi
+        refresh_screen
         ;;
-      6)
+      5)
         show_system_info
         pause_enter
+        refresh_screen
         ;;
-      7)
+      6)
         show_log_tail 40
         pause_enter
+        refresh_screen
         ;;
-      8)
+      7)
+        update_script
         invalidate_status
-        if install_shortcut; then
-          pause_enter
-        fi
+        pause_enter
+        refresh_screen
         ;;
-      9|a|A|all|ALL)
+      8|a|A|all|ALL)
         info "按默认项执行：1、2、3"
         PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
         for entry_slug in sysupdate ssh-port root-passwd; do
@@ -1580,13 +1610,46 @@ menu_loop() {
         run_plan
         invalidate_status
         printf '\n'
+        pause_enter
+        refresh_screen
         ;;
       *)
-        warn "无效的选择：$choice（请输入 0-9）"
+        warn "无效的选择：$choice（请输入 0-8）"
         ;;
     esac
   done
   printf '\n'
+  return 0
+}
+
+# 更新脚本：拉最新发布版，覆盖本地缓存（acxc 用的那份），并报出版本变化
+update_script() {
+  local url="https://github.com/${REPO_SLUG}/releases/latest/download/init.sh"
+  local tmp="${CACHE_DIR}/acxc.new" newv="" oldv="$SCRIPT_VERSION"
+
+  info "正在读取最新版本…"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] 将从 ${url} 拉取最新版，覆盖本地缓存：${CACHE_DIR}/acxc.sh"
+    return 0
+  fi
+  if ! mkdir -p "$CACHE_DIR" 2>/dev/null; then
+    warn "无法创建目录：$CACHE_DIR（需要 root 权限）"
+    return 1
+  fi
+  if ! curl -fsSL "$url" -o "$tmp" 2>/dev/null; then
+    warn "下载失败：请检查网络或 curl 是否可用"
+    rm -f "$tmp"
+    return 1
+  fi
+  newv="$(grep -m1 '^SCRIPT_VERSION=' "$tmp" 2>/dev/null | cut -d'"' -f2)"
+  mv -f "$tmp" "${CACHE_DIR}/acxc.sh" 2>/dev/null || cp -f "$tmp" "${CACHE_DIR}/acxc.sh" 2>/dev/null || true
+  rm -f "$tmp"
+  install_shortcut quiet 2>/dev/null || true
+  if [ -n "$newv" ] && [ "$newv" != "$oldv" ]; then
+    ok "脚本已更新：${oldv} → ${newv}（下次输入 ${SHORTCUT_NAME} 生效，本次仍运行 ${oldv}）"
+  else
+    ok "已经是最新版（v${oldv}）"
+  fi
   return 0
 }
 
@@ -1857,13 +1920,14 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
   -V, --version        显示版本号
 
 菜单:
-  1) 更新内核 / 驱动 / 固件        2) 修改 SSH 端口        3) 修改 root 密码
-  4) 安装常用工具 / fail2ban       5) 时区 / Swap / BBR    6) 查看系统信息
-  7) 查看运行日志                  8) 安装 / 更新快捷命令 acxc
-  9) 全部按默认执行（1 2 3）       0) 退出
+  1) 更新内核 / 驱动 / 固件        2) 修改 SSH 端口
+  3) 修改 root 密码                4) 安装常用工具 / BBR网络加速 / Swap
+  5) 查看系统信息                  6) 查看运行日志
+  7) 更新脚本（拉最新发布版）       8) 全部按默认执行（1 2 3）
+  0) 退出
 
 步骤标识（--only / --skip 用）:
-  sysupdate  ssh-port  root-passwd  tools  tuning
+  sysupdate  ssh-port  root-passwd  extras
 
 安全提示:
   * 改 SSH 端口前，请先在云服务商控制台的安全组放行新端口，并保持当前会话不要断开。
@@ -1927,7 +1991,6 @@ main() {
   check_tty
   check_os
   export DEBIAN_FRONTEND=noninteractive
-  show_system_info
   ssh_load_managed
   # 自动装好快捷命令（下次直接输 acxc 就能打开；内容没变则静默跳过）
   install_shortcut quiet 2>/dev/null || true
