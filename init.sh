@@ -65,20 +65,25 @@ SSH_M_PORTS=""
 SSH_M_PERMIT_ROOT_LOGIN=""
 SSH_M_PASSWORD_AUTH=""
 
-declare -a PLAN_SLUGS=() PLAN_TITLES=() PLAN_FUNCS=()
+declare -a PLAN_SLUGS=() PLAN_TITLES=() PLAN_FUNCS=() PLAN_TOOLS=()
+KERNEL_STATUS_CACHE=""
 declare -a RESULT_NAMES=() RESULT_STATES=()
 
 # ============================== 步骤注册表 ==================================
 # 格式: "标识|名称|默认值(y/n)|函数名"
 # 默认值只是"直接回车"时的取值，每一项都会单独询问 Y/N。
 STEPS=(
-  "sysupdate|只更新内核 / 驱动 / 固件|y|step_sysupdate"
+  "sysupdate|更新内核 / 驱动 / 固件|y|step_sysupdate"
   "ssh-port|修改 SSH 端口（默认 ${DEFAULT_SSH_PORT}）|y|step_ssh_port"
   "root-passwd|修改 root 密码|y|step_root_password"
-  "fail2ban|安装配置 fail2ban|n|step_fail2ban"
+  "tools|常用工具 / fail2ban|n|step_tools"
   "tuning|时区 / Swap / BBR 网络加速|n|step_tuning"
-  "tools|安装常用命令行工具|n|step_tools"
 )
+
+# 快捷命令：安装成 acxc，以后直接输入 acxc 就能打开
+SHORTCUT_DIR="${VPS_INIT_SHORTCUT_DIR:-/usr/local/bin}"
+SHORTCUT_NAME="acxc"
+CACHE_DIR="${VPS_INIT_CACHE_DIR:-/usr/local/share/acxc}"
 
 # ============================== 输出与日志 ==================================
 C_RST=''; C_BLD=''; C_GRN=''; C_YEL=''; C_RED=''; C_CYN=''; C_DIM=''
@@ -175,6 +180,11 @@ detect_tty() {
 # 各种分隔符转空格。这样即使误按方向键也不会把 ^[[A 当成有效输入。
 menu_clean_input() { # $1=原始输入 → 清洗后的字符串
   local s="${1-}" i
+  # 快路径：纯可打印 ASCII（绝大多数输入）直接返回，省掉子进程
+  case "$s" in
+    *[!\ -~]*) ;;
+    *) printf '%s' "$s"; return 0 ;;
+  esac
   s="$(printf '%s' "$s" | sed -e 's/\x1b\[[0-9;?]*[A-Za-z~]//g' -e 's/\^\[\[[0-9;?]*[A-Za-z~]//g')"
   s="$(printf '%s' "$s" | tr -d '\000-\037\177')"
   local -a fw=(０ １ ２ ３ ４ ５ ６ ７ ８ ９)
@@ -619,102 +629,53 @@ installed_kernel_pkgs() { # 已安装的内核/驱动/固件包
 }
 
 step_sysupdate() {
-  local rc=0 virt pkgs="" cnt=0 major=0
-  virt="$(virt_type)"
-  info "虚拟化类型：${virt}"
-  case "$virt" in
-    openvz|lxc|lxc-libvirt|docker|podman|systemd-nspawn)
-      warn "容器/OpenVZ 环境下内核与驱动由宿主机提供，本机只能更新用户态软件包。" ;;
-    *)
-      info "本步骤只更新内核 / 驱动模块 / 固件相关的包，系统里其它软件包默认不动。" ;;
-  esac
+  local rc=0 pkgs="" cnt=0
 
-  info "1/4 检查软件包状态（有没有装到一半中断的）…"
-  if dpkg --audit 2>/dev/null | grep -q .; then
-    warn "检测到未完成的软件包安装，先修复："
-    run env DEBIAN_FRONTEND=noninteractive dpkg --configure -a || warn "dpkg --configure -a 返回非零（继续）"
-    run env DEBIAN_FRONTEND=noninteractive apt-get -y -f install || warn "apt-get -f install 返回非零（继续）"
-  else
-    ok "软件包状态正常，无需修复。"
-  fi
-
-  info "2/4 刷新软件源索引（apt update：只更新索引，不动任何软件）…"
+  info "1/3 刷新软件源索引（只更新索引，不动任何软件）…"
   if ! run env DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3; then
-    err "apt update 失败：请检查网络、软件源或磁盘空间"
+    err "apt update 失败：请检查网络 / 软件源 / 磁盘空间"
     return 1
   fi
 
-  info "3/4 只升级内核 / 驱动 / 固件…"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    info "本机已安装的内核/驱动相关包："
-    installed_kernel_pkgs 2>/dev/null | sed 's/^/    /' || true
-  fi
+  info "2/3 升级内核 / 驱动 / 固件…"
   if have apt; then
     pkgs="$(upgradable_kernel_pkgs)"
   else
-    warn "未找到 apt 命令，改为直接尝试升级已安装的内核/驱动包"
     pkgs="$(installed_kernel_pkgs)"
   fi
 
   if [ -z "$pkgs" ]; then
     ok "内核 / 驱动 / 固件已经是最新，无需升级。"
   else
-    cnt="$(printf '%s\n' "$pkgs" | wc -l | tr -d ' ')"
+    cnt="$(printf '%s\n' "$pkgs" | grep -c . || true)"
     info "发现 ${cnt} 个可升级的包："
     printf '%s\n' "$pkgs" | sed 's/^/    /'
-    if ask_yn "是否升级上面这些内核/驱动/固件包？" y; then
-      # shellcheck disable=SC2086
-      if run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
-        apt-get -y install --only-upgrade $pkgs \
-        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
-        -o Dpkg::Lock::Timeout=900; then
-        ok "内核 / 驱动 / 固件升级完成"
-      else
-        warn "升级过程中出现错误，请查看上方输出与日志：${LOG_FILE:-未启用}"
-        rc=1
-      fi
-    else
-      info "已跳过内核/驱动升级。"
-    fi
-  fi
-
-  info "4/4 可选项（下面几项默认都不做）…"
-  if ask_yn "是否顺便升级系统里【其它所有】软件包（apt full-upgrade）？" n; then
-    major=1
-    run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
-      apt-get -y \
+    # shellcheck disable=SC2086
+    if run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
+      apt-get -y install --only-upgrade $pkgs \
       -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
-      -o Dpkg::Lock::Timeout=900 \
-      full-upgrade || { warn "全量升级出现错误，请查看上方输出"; rc=1; }
-  else
-    info "保持不动：本次不升级其它软件包。"
-  fi
-
-  if ! is_container && ! dpkg -s linux-firmware >/dev/null 2>&1; then
-    if ask_yn "本机没装 linux-firmware 固件包，是否安装？（VPS 一般用不到，体积数百 MB）" n; then
-      run env DEBIAN_FRONTEND=noninteractive apt-get -y install linux-firmware || warn "安装失败（软件源里可能没有该包）"
+      -o Dpkg::Lock::Timeout=900; then
+      ok "内核 / 驱动 / 固件升级完成"
+    else
+      warn "升级过程中出现错误，请查看上方输出与日志：${LOG_FILE:-未启用}"
+      rc=1
     fi
   fi
 
-  if ask_yn "是否清理不再需要的依赖包（apt autoremove --purge）？" n; then
-    run env DEBIAN_FRONTEND=noninteractive apt-get -y autoremove --purge || warn "autoremove 返回非零"
-  fi
-
-  if [ "$major" -eq 0 ] && ! installed_kernel_pkgs 2>/dev/null | grep -qE '^linux-(generic|image-generic|virtual|image-virtual|image-amd64|image-cloud-amd64|image-arm64|image-rt-amd64)'; then
-    info "提示：本机没有内核元包（如 linux-image-generic），内核不会自动跟随更新；需要的话手动 apt install 即可。"
-  fi
-
+  info "3/3 检查是否需要重启…"
   if [ -f "$REBOOT_REQUIRED_FILE" ]; then
     NEED_REBOOT=1
     warn "系统需要重启才能加载新内核/驱动。"
     if [ -s "${REBOOT_REQUIRED_FILE}.pkgs" ]; then
       info "触发重启的包：$(tr '\n' ' ' <"${REBOOT_REQUIRED_FILE}.pkgs")"
     fi
+  else
+    ok "不需要重启。"
   fi
-  ok "内核 / 驱动更新流程结束（当前运行内核：$(uname -r)）"
+
+  ok "完成（当前运行内核：$(uname -r)）"
   return "$rc"
 }
-
 # ============================== 步骤 2：SSH 端口 ============================
 step_ssh_port() {
   if [ ! -f /etc/ssh/sshd_config ]; then
@@ -1219,41 +1180,105 @@ EOF
   return "$rc"
 }
 
-# ============================== 步骤 6：常用工具 ============================
+# ==================== 步骤 4：常用工具 / fail2ban ==========================
+# 每项都可以单独选，[推荐] 的项在"直接回车"时会默认安装
+TOOL_ITEMS=(
+  "curl wget ca-certificates gnupg|下载 / 证书 / 密钥等基础组件|y"
+  "vim nano|文本编辑器|y"
+  "htop tmux lsof|进程 / 会话 / 文件占用查看|y"
+  "git rsync unzip zip|同步与压缩打包|y"
+  "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|y"
+  "bash-completion|命令自动补全（Tab 补全更好用）|y"
+  "net-tools dnsutils mtr-tiny traceroute|网络诊断（排障用）|n"
+  "fail2ban|防 SSH 暴力破解（选中会自动装好并配置）|n"
+)
+
 step_tools() {
-  local base="curl wget vim nano htop tmux screen unzip zip git rsync lsof ca-certificates gnupg jq tree bash-completion"
-  local net="net-tools mtr-tiny traceroute dnsutils"
-  local all="" p rcp=0
+  local i=0 sel="" raw="" line="" tok="" ok=1 rcp=0
+  local -a g_pkgs=() g_title=() g_rec=()
+  local entry pkgs title rec
 
-  if ask_yn "是否额外安装网络诊断工具（net-tools / mtr / traceroute / dnsutils）？" y; then
-    all="${base} ${net}"
-  else
-    all="$base"
-  fi
+  for entry in "${TOOL_ITEMS[@]}"; do
+    IFS='|' read -r pkgs title rec <<<"$entry"
+    i=$((i + 1))
+    g_pkgs+=("$pkgs"); g_title+=("$title"); g_rec+=("$rec")
+    if [ "$rec" = y ]; then
+      printf '  %s%2d)%s %-38s %s\n' "${C_GRN}" "$i" "${C_RST}" "$title" "${C_DIM}[推荐]${C_RST}"
+    else
+      printf '  %s%2d)%s %-38s %s\n' "${C_DIM}" "$i" "${C_RST}" "$title" "${C_DIM}[按需]${C_RST}"
+    fi
+  done
+  printf '\n'
+  info "输入要安装的编号（可多选，例如：1 3）；直接回车＝只装 [推荐] 的项；a＝全部；0＝返回"
 
-  info "将安装：$(printf '%s' "$all" | tr -s ' ')"
-  # shellcheck disable=SC2086
-  if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $all; then
-    ok "常用工具安装完成"
+  while :; do
+    if ! read_line "请选择"; then return 1; fi
+    raw="$REPLY"
+    line="$(trim "$(menu_clean_input "$raw")")"
+    if [ -z "$(trim "$raw")" ]; then
+      for i in "${!g_pkgs[@]}"; do
+        [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
+      done
+      break
+    fi
+    if [ -z "$line" ]; then
+      warn "没认出输入来：请直接输入编号，例如 1 3"
+      continue
+    fi
+    case "$line" in
+      0|q|Q) info "已返回。"; return 0 ;;
+      a|A|all|ALL) for i in "${!g_pkgs[@]}"; do plan_tool_add "$i"; done; break ;;
+    esac
+    PLAN_TOOLS=()
+    ok=1
+    # shellcheck disable=SC2086
+    for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
+      case "$tok" in
+        ''|*[!0-9]*) ok=0; break ;;
+      esac
+      if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#g_pkgs[@]}" ]; then ok=0; break; fi
+      plan_tool_add "$((tok - 1))"
+    done
+    if [ "$ok" -eq 1 ] && [ "${#PLAN_TOOLS[@]}" -gt 0 ]; then break; fi
+    warn "编号不对，请输入 1-${#g_pkgs[@]} 之间的数字，例如：1 3"
+  done
+
+  if [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
+    info "没有选择任何项，返回。"
     return 0
   fi
 
-  warn "整体安装失败，改为逐个安装以定位问题（个别包在精简系统上可能不存在）…"
-  # shellcheck disable=SC2086
-  for p in $all; do
-    if ! run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$p" >/dev/null 2>&1; then
-      warn "安装失败：$p"
-      rcp=1
+  # 安装选中的软件包（fail2ban 交给它自己的步骤处理）
+  for i in "${PLAN_TOOLS[@]}"; do
+    pkgs="${g_pkgs[$i]}"
+    title="${g_title[$i]}"
+    if [ "$pkgs" = "fail2ban" ]; then
+      info "安装配置 fail2ban…"
+      step_fail2ban || rcp=1
+      continue
+    fi
+    info "安装：${title}（$(printf '%s' "$pkgs" | tr -s ' ')）"
+    # shellcheck disable=SC2086
+    if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
+      ok "已安装：${title}"
+    else
+      warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
+      for sel in $pkgs; do
+        run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$sel" >/dev/null 2>&1 || {
+          warn "安装失败：$sel"
+          rcp=1
+        }
+      done
     fi
   done
+
   if [ "$rcp" -eq 0 ]; then
-    ok "常用工具安装完成（逐包安装方式）"
+    ok "选中的项目都处理完了。"
   else
-    warn "部分工具安装失败，可稍后手动安装。"
+    warn "有部分项目没装上，可稍后重试。"
   fi
   return 0
 }
-
 # ============================== 计划与执行 ==================================
 list_steps() {
   local entry slug title def fn
@@ -1263,6 +1288,76 @@ list_steps() {
     printf '  %-13s %-40s 默认: %s\n' "$slug" "$title" "$def"
   done
   printf '\n用法：--only sysupdate,ssh-port   /   --skip tools\n'
+}
+
+# 等用户按回车（看完长输出后继续）
+pause_enter() {
+  printf '\n  %s\n' "${C_DIM}（按回车继续）${C_RST}"
+  _prompt_line "  " "" >/dev/null 2>&1 || true
+  return 0
+}
+
+# 内核状态那行要跑 apt，比较慢：算一次缓存起来；执行过操作后再失效重算
+invalidate_status() { KERNEL_STATUS_CACHE=""; return 0; }
+
+# 快捷命令：生成 /usr/local/bin/acxc，以后直接输入 acxc 就能打开
+shortcut_body() {
+  cat <<EOF
+#!/bin/sh
+# ACXC16-VPS新机一键脚本 的快捷命令（自动生成；删除本文件即可取消快捷方式）
+URL="https://github.com/${REPO_SLUG}/releases/latest/download/init.sh"
+CACHE="${CACHE_DIR}/acxc.sh"
+if command -v curl >/dev/null 2>&1; then
+  if curl -fsSL "\$URL" -o "\$CACHE.tmp" 2>/dev/null; then mv "\$CACHE.tmp" "\$CACHE"; fi
+fi
+[ -s "\$CACHE" ] || { echo "下载失败，而且没有本地缓存；请检查网络后重试"; exit 1; }
+exec bash "\$CACHE" "\$@"
+EOF
+}
+
+install_shortcut() { # $1=quiet：自动安装时用，没变化就完全不说话
+  local quiet="${1:-}" target="${SHORTCUT_DIR}/${SHORTCUT_NAME}" tmp="" changed=0 src=""
+  if [ "$DRY_RUN" -eq 1 ] && [ -z "${VPS_INIT_SHORTCUT_DIR:-}" ]; then
+    info "[dry-run] 将安装快捷命令：${target}"
+    return 0
+  fi
+  if ! mkdir -p "$SHORTCUT_DIR" "$CACHE_DIR" 2>/dev/null; then
+    warn "无法创建目录：$SHORTCUT_DIR（需要 root 权限）"
+    return 1
+  fi
+  tmp="$(mktemp)" || return 1
+  shortcut_body >"$tmp"
+  if [ ! -f "$target" ] || ! cmp -s "$tmp" "$target"; then
+    if cat "$tmp" >"$target" 2>/dev/null; then
+      chmod 755 "$target" 2>/dev/null || true
+      changed=1
+    else
+      rm -f "$tmp"
+      warn "写入失败：${target}（需要 root 权限）"
+      return 1
+    fi
+  fi
+  rm -f "$tmp"
+  # 顺便缓存一份当前脚本，断网时也能用
+  src="${BASH_SOURCE[0]:-}"
+  if [ -n "$src" ] && [ -r "$src" ] && [ "$src" != "${CACHE_DIR}/acxc.sh" ]; then
+    cp -f "$src" "${CACHE_DIR}/acxc.sh" 2>/dev/null || true
+  fi
+  if [ "$changed" -eq 1 ]; then
+    ok "快捷命令已就绪：直接输入 ${SHORTCUT_NAME} 就能打开（删除 ${target} 可移除）"
+  elif [ -z "$quiet" ]; then
+    ok "快捷命令已是最新：${target}"
+  fi
+  return 0
+}
+
+plan_tool_add() { # $1=工具项下标 → 记录到待安装列表（自动去重）
+  local i
+  for i in "${PLAN_TOOLS[@]:-}"; do
+    [ "$i" = "$1" ] && return 0
+  done
+  PLAN_TOOLS+=("$1")
+  return 0
 }
 
 plan_add() { # $1=步骤标识 → 追加到执行计划
@@ -1280,19 +1375,25 @@ plan_add() { # $1=步骤标识 → 追加到执行计划
 # ============================== 状态表 ======================================
 # 每个步骤在本机当前的真实状态，风格参考常见管理面板（项目 / 状态）
 status_kernel() {
-  local k="" n=""
+  local k="" n="" out=""
+  if [ -n "$KERNEL_STATUS_CACHE" ]; then
+    printf '%s' "$KERNEL_STATUS_CACHE"
+    return 0
+  fi
   k="$(uname -r)"
   if have apt; then
     n="$(upgradable_kernel_pkgs 2>/dev/null | grep -c . || true)"
     case "$n" in ''|*[!0-9]*) n=0 ;; esac
     if [ "$n" -gt 0 ]; then
-      printf '内核 %s（有 %s 个驱动/内核包可升级）' "$k" "$n"
+      out="内核 ${k}（有 ${n} 个驱动/内核包可升级）"
     else
-      printf '内核 %s（已是最新）' "$k"
+      out="内核 ${k}（已是最新）"
     fi
   else
-    printf '内核 %s' "$k"
+    out="内核 ${k}"
   fi
+  KERNEL_STATUS_CACHE="$out"
+  printf '%s' "$out"
 }
 
 status_ssh() {
@@ -1397,14 +1498,14 @@ show_log_tail() { # 看最近的日志
 # ============================== 操作菜单 ====================================
 show_menu() {
   printf '%s\n' "${C_BLD}${C_CYN}操作菜单${C_RST}"
-  printf '  %s\n' "1) 只更新内核 / 驱动 / 固件"
+  printf '  %s\n' "1) 更新内核 / 驱动 / 固件"
   printf '  %s\n' "2) 修改 SSH 端口"
   printf '  %s\n' "3) 修改 root 密码"
-  printf '  %s\n' "4) 安装配置 fail2ban"
+  printf '  %s\n' "4) 安装常用工具 / fail2ban"
   printf '  %s\n' "5) 时区 / Swap / BBR 网络加速"
-  printf '  %s\n' "6) 安装常用命令行工具"
-  printf '  %s\n' "7) 查看系统信息"
-  printf '  %s\n' "8) 查看运行日志"
+  printf '  %s\n' "6) 查看系统信息"
+  printf '  %s\n' "7) 查看运行日志"
+  printf '  %s\n' "8) 安装 / 更新快捷命令 ${SHORTCUT_NAME}"
   printf '  %s\n' "9) 全部按默认执行（1 2 3）"
   printf '  %s\n' "0) 退出"
   printf '\n'
@@ -1445,27 +1546,30 @@ menu_loop() {
     case "$choice" in
       0|q|Q|exit|quit)
         break ;;
-      1|2|3|4|5|6)
+      1|2|3|4|5)
         n="$choice"
         PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
         if plan_add "$(step_slug_by_index "$n")"; then
           run_plan
-          printf '\n'
-          printf '  %s\n' "${C_DIM}（按回车继续）${C_RST}"
-          _prompt_line "  " "" >/dev/null 2>&1 || true
+          invalidate_status
+          pause_enter
         else
           warn "无效的选择：$choice"
         fi
         ;;
-      7)
+      6)
         show_system_info
-        printf '\n  %s\n' "${C_DIM}（按回车继续）${C_RST}"
-        _prompt_line "  " "" >/dev/null 2>&1 || true
+        pause_enter
+        ;;
+      7)
+        show_log_tail 40
+        pause_enter
         ;;
       8)
-        show_log_tail 40
-        printf '\n  %s\n' "${C_DIM}（按回车继续）${C_RST}"
-        _prompt_line "  " "" >/dev/null 2>&1 || true
+        invalidate_status
+        if install_shortcut; then
+          pause_enter
+        fi
         ;;
       9|a|A|all|ALL)
         info "按默认项执行：1、2、3"
@@ -1474,6 +1578,7 @@ menu_loop() {
           plan_add "$entry_slug"
         done
         run_plan
+        invalidate_status
         printf '\n'
         ;;
       *)
@@ -1744,7 +1849,6 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
       --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
       --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
-      --text           兼容保留（界面本来就是纯文字菜单，可加可不加）
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）
       --no-color       关闭彩色输出
       --log-file <路径> 指定日志文件（默认 /var/log/vps-init.log）
@@ -1752,13 +1856,14 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
   -h, --help           显示本帮助
   -V, --version        显示版本号
 
+菜单:
+  1) 更新内核 / 驱动 / 固件        2) 修改 SSH 端口        3) 修改 root 密码
+  4) 安装常用工具 / fail2ban       5) 时区 / Swap / BBR    6) 查看系统信息
+  7) 查看运行日志                  8) 安装 / 更新快捷命令 acxc
+  9) 全部按默认执行（1 2 3）       0) 退出
+
 步骤标识（--only / --skip 用）:
-  sysupdate     只更新内核 / 驱动 / 固件（其它软件包默认不动）
-  ssh-port      修改 SSH 端口（默认 52052）
-  root-passwd   修改 root 密码
-  fail2ban      安装配置 fail2ban
-  tuning        时区 / Swap / BBR
-  tools         安装常用命令行工具
+  sysupdate  ssh-port  root-passwd  tools  tuning
 
 安全提示:
   * 改 SSH 端口前，请先在云服务商控制台的安全组放行新端口，并保持当前会话不要断开。
@@ -1783,10 +1888,7 @@ parse_args() {
       --dry-run) DRY_RUN=1 ;;
       --force) FORCE_OS=1 ;;
       --no-color) COLOR_OFF=1 ;;
-      --ui) shift; [ -n "${1:-}" ] || die "--ui 需要一个参数"; warn "图形方框界面已移除，现在统一是状态表 + 编号菜单（--ui 仅作兼容）" ;;
-      --ui=*) warn "图形方框界面已移除，现在统一是状态表 + 编号菜单（--ui 仅作兼容）" ;;
-      --text) : ;;
-      --menu) : ;;
+
       --log-file) shift; LOG_FILE="${1:-$LOG_FILE}"; [ -n "${1:-}" ] || die "--log-file 需要一个参数" ;;
       --log-file=*) LOG_FILE="${1#*=}" ;;
       --list) list_steps; exit 0 ;;
@@ -1827,6 +1929,8 @@ main() {
   export DEBIAN_FRONTEND=noninteractive
   show_system_info
   ssh_load_managed
+  # 自动装好快捷命令（下次直接输 acxc 就能打开；内容没变则静默跳过）
+  install_shortcut quiet 2>/dev/null || true
 
   # 指定了 --only / --skip / --yes 时：一次性执行，不进菜单
   if [ -n "$ONLY_LIST" ] || [ -n "$SKIP_LIST" ] || [ "$ASSUME_YES" -eq 1 ]; then
