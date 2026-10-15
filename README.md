@@ -202,7 +202,14 @@ bash tests/smoke.sh      # 冒烟测试：32 项断言，全部在 --dry-run 下
 shellcheck init.sh tests/smoke.sh
 ```
 
-`tests/smoke.sh` 会把 `/etc/ssh` 指向临时目录后再测试，所以在你自己的机器上跑也是安全的。仓库自带 GitHub Actions（`.github/workflows/ci.yml`）：语法检查 + 冒烟测试 + ShellCheck，push 之后在仓库的 **Actions** 页能看到结果。
+`tests/smoke.sh` 会把 `/etc/ssh` 指向临时目录后再测试，所以在你自己的机器上跑也是安全的。仓库自带 GitHub Actions（`.github/workflows/ci.yml`）：语法检查 + 冒烟测试 + ShellCheck，push 之后在仓库的 **Actions** 页能看到结果；测试失败时会把失败项以 **注解（Annotations）** 抛出来，不用翻日志就能看到是哪一项、期望值和实际值。
+
+脚本里有两个只在测试时用到的环境变量（日常使用不用管）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `VPS_INIT_ALLOW_NONROOT=1` | 配合 `--dry-run`，允许用非 root 身份跑（本地/CI 测试用） |
+| `VPS_INIT_FORCE_STDIN=1` | 强制从 stdin 读取回答，方便测试脚本自动喂 y/n |
 
 ---
 
