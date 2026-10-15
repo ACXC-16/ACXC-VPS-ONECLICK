@@ -68,6 +68,8 @@ OPT_PASSWORD=""
 GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
 SSH_PORT_CHANGED=""
+NO_CHANGE=0
+SESSION_CHANGED=0
 
 # 交互界面：状态表 + 编号菜单（纯文字，任何终端都能用；不支持图形方框是有意为之）
 
@@ -84,7 +86,7 @@ declare -a RESULT_NAMES=() RESULT_STATES=()
 # 默认值只是"直接回车"时的取值，每一项都会单独询问 Y/N。
 STEPS=(
   "sysupdate|更新内核 / 驱动 / 固件|y|step_sysupdate"
-  "access|修改 SSH 端口 / root 密码|y|step_access"
+  "access|修改 root 密码 / SSH 端口|y|step_access"
   "extras|安装常用工具 / BBR网络加速 / Swap|n|step_extras"
 )
 
@@ -805,6 +807,7 @@ step_sysupdate() {
       -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
       -o Dpkg::Lock::Timeout=900; then
       ok "升级完成"
+      SESSION_CHANGED=1
     else
       warn "升级过程中出现错误"
       rc=1
@@ -947,6 +950,7 @@ ssh_apply_port() {
     done
   fi
   info "写入 SSH 端口配置：$(trim "$SSH_M_PORTS" | tr -s ' ')"
+  [ "$DRY_RUN" -eq 0 ] && SESSION_CHANGED=1
   if ! ssh_write_managed; then
     err "写入 SSH 配置失败，已回滚"
     ssh_restore_backup
@@ -1069,6 +1073,7 @@ passwd_apply() {
 
   if printf 'root:%s\n' "$pw" | chpasswd; then
     ok "root 密码已修改成功"
+    SESSION_CHANGED=1
   else
     err "chpasswd 执行失败，密码未修改"
     pw=""
@@ -1140,6 +1145,8 @@ passwd_apply() {
 
 # ==================== 步骤 2：修改 SSH 端口 / root 密码 ====================
 # 没有二级菜单：第一步问端口（直接回车＝52052），第二步问密码（直接回车＝不修改）
+# ==================== 步骤 2：修改 root 密码 / SSH 端口 ====================
+# 两步走，不需要二级菜单：第一步改 root 密码（回车＝不改），第二步改 SSH 端口（回车＝52052）
 step_access() {
   local rc=0 pw="" p2=""
 
@@ -1159,8 +1166,47 @@ step_access() {
     return "$rc"
   fi
 
-  # ---------- 1) SSH 端口 ----------
-  printf '\n%s\n' "  ${C_BLD}第一步：修改 SSH 端口${C_RST}"
+  # ---------- 1) root 密码 ----------
+  printf '\n%s\n' "  ${C_BLD}第一步：修改 root 密码${C_RST}"
+  info "当前状态：$(status_passwd)"
+  warn "改密码前请确认当前会话不要断开，最好保持另一个终端已登录。"
+  info "直接回车＝不修改 root 密码；如果想用脚本默认密码，就输入：${DEFAULT_ROOT_PASSWORD}"
+  if ! _prompt_secret "  请输入新的 root 密码（回车＝不修改）: "; then
+    warn "读取密码失败，已跳过 root 密码修改。"
+  else
+    pw="$REPLY"
+    if [ -z "$pw" ]; then
+      info "没有输入密码：root 密码保持不变。"
+    else
+      case "$pw" in
+        *[$'\n\r']*) warn "密码不能包含换行符，已跳过 root 密码修改"; pw="" ;;
+      esac
+      if [ -n "$pw" ] && [ "${#pw}" -lt 8 ]; then
+        warn "密码长度至少 8 位（当前 ${#pw} 位），已跳过 root 密码修改"
+        pw=""
+      fi
+      # 不是默认密码时要求再输一遍，避免打错把自己锁在外面
+      if [ -n "$pw" ] && [ "$pw" != "$DEFAULT_ROOT_PASSWORD" ]; then
+        if _prompt_secret "  请再次输入以确认: "; then
+          p2="$REPLY"
+          if [ "$pw" != "$p2" ]; then
+            warn "两次输入不一致，已跳过 root 密码修改。"
+            pw=""
+          fi
+        else
+          warn "读取密码失败，已跳过 root 密码修改。"
+          pw=""
+        fi
+      fi
+      if [ -n "$pw" ]; then
+        passwd_apply "$pw" 0 || rc=1
+      fi
+    fi
+  fi
+  pw=""; p2=""
+
+  # ---------- 2) SSH 端口 ----------
+  printf '\n%s\n' "  ${C_BLD}第二步：修改 SSH 端口${C_RST}"
   if ssh_ask_port; then
     if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
       SSH_PORT_CHANGED="$SSH_NEW_PORT"
@@ -1171,56 +1217,25 @@ step_access() {
     warn "已跳过 SSH 端口修改。"
   fi
 
-  # ---------- 2) root 密码 ----------
-  printf '\n%s\n' "  ${C_BLD}第二步：修改 root 密码${C_RST}"
-  info "当前 root 密码状态：$(passwd -S root 2>/dev/null || printf '未知')"
-  warn "改密码前请确认当前会话不要断开，最好保持另一个终端已登录。"
-  info "直接回车＝不修改 root 密码；如果想用脚本默认密码，就输入：${DEFAULT_ROOT_PASSWORD}"
-  if ! _prompt_secret "  请输入新的 root 密码（回车＝不修改）: "; then
-    warn "读取密码失败，已跳过 root 密码修改。"
-    return "$rc"
-  fi
-  pw="$REPLY"
-
-  if [ -z "$pw" ]; then
-    info "没有输入密码：root 密码保持不变。"
-  else
-    case "$pw" in
-      *[$'\n\r']*) warn "密码不能包含换行符，已跳过 root 密码修改"; return "$rc" ;;
-    esac
-    if [ "${#pw}" -lt 8 ]; then
-      warn "密码长度至少 8 位（当前 ${#pw} 位），已跳过 root 密码修改"
-      return "$rc"
-    fi
-    # 不是默认密码时要求再输一遍，避免打错把自己锁在外面
-    if [ "$pw" != "$DEFAULT_ROOT_PASSWORD" ]; then
-      if ! _prompt_secret "  请再次输入以确认: "; then
-        warn "读取密码失败，已跳过 root 密码修改。"
-        return "$rc"
-      fi
-      p2="$REPLY"
-      if [ "$pw" != "$p2" ]; then
-        warn "两次输入不一致，已跳过 root 密码修改。"
-        return "$rc"
-      fi
-    fi
-    passwd_apply "$pw" 0 || rc=1
-  fi
-  pw=""; p2=""
-
   printf '\n'
   if [ -n "$SSH_PORT_CHANGED" ] || [ -n "$NEW_ROOT_PASSWORD" ]; then
     printf '%s\n' "  ${C_BLD}${C_GRN}本次改动：${C_RST}"
-    [ -n "$SSH_PORT_CHANGED" ] && printf '     SSH 端口 → %s\n' "$SSH_PORT_CHANGED"
     if [ -n "$NEW_ROOT_PASSWORD" ]; then
       printf '     root 密码 → %s\n' "$NEW_ROOT_PASSWORD"
     else
       printf '     root 密码 → 未修改\n'
     fi
+    [ -n "$SSH_PORT_CHANGED" ] && printf '     SSH 端口 → %s\n' "$SSH_PORT_CHANGED"
   else
     printf '%s\n' "  ${C_BLD}本次没有做任何修改。${C_RST}"
   fi
   printf '\n'
+
+  if [ -z "$SSH_PORT_CHANGED" ] && [ -z "$NEW_ROOT_PASSWORD" ]; then
+    mark_no_change
+  else
+    SESSION_CHANGED=1
+  fi
   return "$rc"
 }
 
@@ -1282,6 +1297,7 @@ EOF
   if have fail2ban-client && fail2ban-client status sshd >/dev/null 2>&1; then
     banned="$(fail2ban-client status sshd 2>/dev/null | awk '/Currently banned/{print $NF}')"
     ok "fail2ban 已启用并保护 sshd（当前封禁 ${banned:-0} 个 IP）"
+  [ "$DRY_RUN" -eq 0 ] && SESSION_CHANGED=1
     return 0
   fi
 
@@ -1292,6 +1308,7 @@ EOF
     sleep 2
     if have fail2ban-client && fail2ban-client status sshd >/dev/null 2>&1; then
       ok "fail2ban 已启用（日志文件后端）"
+  [ "$DRY_RUN" -eq 0 ] && SESSION_CHANGED=1
       return 0
     fi
   fi
@@ -1350,6 +1367,7 @@ create_swap() {
   printf '%s\n' 'vm.swappiness=10' >/etc/sysctl.d/99-acxc-vps-swap.conf
   sysctl -q -w vm.swappiness=10 >/dev/null 2>&1 || true
   ok "Swap 已启用：$(free -h 2>/dev/null | awk '/^Swap:/{print $2}')"
+  SESSION_CHANGED=1
   return 0
 }
 
@@ -1373,7 +1391,10 @@ set_timezone() {
     run ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || rc=1
     run sh -c "printf '%s\\n' '$tz' > /etc/timezone" || true
   fi
-  if [ "$DRY_RUN" -eq 0 ]; then ok "时区已设置为 $tz（当前：$(date '+%F %T %Z')）"; fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    ok "时区已设置为 $tz（当前：$(date '+%F %T %Z')）"
+    SESSION_CHANGED=1
+  fi
   return "$rc"
 }
 
@@ -1432,6 +1453,7 @@ EOF
   qd="$(sysctl -n net.core.default_qdisc 2>/dev/null)"
   if [ "$cc" = "bbr" ]; then
     ok "BBR 已开启（拥塞控制：${cc}，队列：${qd:-未知}，调整前：${befor_cc:-未知}）"
+    SESSION_CHANGED=1
   else
     warn "BBR 未生效（当前：${cc:-未知}）。OpenVZ/LXC 等共享内核环境通常不支持。"
     return 1
@@ -1504,7 +1526,7 @@ step_extras() {
     else
       line="$(trim "$(menu_clean_input "$raw")")"
       case "$line" in
-        0|q|Q) return 0 ;;
+        0|q|Q) mark_no_change; return 0 ;;
         a|A|all|ALL)
           PLAN_TOOLS=()
           for i in "${!g_pkgs[@]}"; do plan_tool_add "$i"; done ;;
@@ -1552,6 +1574,7 @@ step_extras() {
       # shellcheck disable=SC2086
       if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
         ok "已安装：${title}"
+        SESSION_CHANGED=1
       else
         warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
         for sel in $pkgs; do
@@ -1595,14 +1618,23 @@ shortcut_body() {
 # ACXC16-VPS新机一键脚本 的快捷命令（自动生成；删除本文件即可取消快捷方式）
 URL="https://github.com/${REPO_SLUG}/releases/latest/download/init.sh"
 CACHE="${CACHE_DIR}/acxc.sh"
-if command -v curl >/dev/null 2>&1; then
-  if curl -fsSL "\$URL" -o "\$CACHE.tmp" 2>/dev/null; then mv "\$CACHE.tmp" "\$CACHE"; fi
+
+# 有本地缓存就直接用（秒开），只有缓存超过 12 小时才在后台悄悄更新
+if [ -s "\$CACHE" ]; then
+  if [ -n "\$(find "\$CACHE" -mmin +720 2>/dev/null)" ] && command -v curl >/dev/null 2>&1; then
+    ( curl -fsSL "\$URL" -o "\$CACHE.tmp" 2>/dev/null && mv "\$CACHE.tmp" "\$CACHE" ) >/dev/null 2>&1 &
+  fi
+  exec bash "\$CACHE" "\$@"
 fi
-[ -s "\$CACHE" ] || { echo "下载失败，而且没有本地缓存；请检查网络后重试"; exit 1; }
+
+# 第一次没有缓存，才同步下载
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "\$URL" -o "\$CACHE.tmp" 2>/dev/null && mv "\$CACHE.tmp" "\$CACHE"
+fi
+[ -s "\$CACHE" ] || { echo "下载失败：请检查网络后重试"; exit 1; }
 exec bash "\$CACHE" "\$@"
 EOF
 }
-
 install_shortcut() { # $1=quiet：自动安装时用，没变化就完全不说话
   local quiet="${1:-}" target="${SHORTCUT_DIR}/${SHORTCUT_NAME}" tmp="" changed=0 src=""
   if [ "$DRY_RUN" -eq 1 ] && [ -z "${ACXC_VPS_SHORTCUT_DIR:-}" ]; then
@@ -1660,11 +1692,273 @@ plan_add() { # $1=步骤标识 → 追加到执行计划
   return 1
 }
 
+# ============================== 重启服务 ====================================
+restart_service_now() { # $1=ssh|fail2ban
+  case "$1" in
+    ssh)
+      have sshd || { warn "本机没有 sshd，跳过。"; return 1; }
+      restart_ssh ;;
+    fail2ban)
+      have fail2ban-client || { warn "本机没有安装 fail2ban，跳过。"; return 1; }
+      if have systemctl; then
+        run systemctl restart fail2ban
+      else
+        run service fail2ban restart
+      fi ;;
+    *)
+      return 1 ;;
+  esac
+}
+
+step_restart() {
+  local choice="" rc=0
+  while :; do
+    printf '\n%s\n' "  ${C_BLD}要重启哪些服务：${C_RST}"
+    printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
+    printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
+    printf '  %s3)%s 全部重启（SSH + fail2ban）\n' "${C_GRN}" "${C_RST}"
+    printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
+    printf '\n'
+    info "重启 SSH 不会断开你已经登录的连接。"
+    if ! read_line "请选择"; then return 1; fi
+    choice="$(trim "$(menu_clean_input "$REPLY")")"
+
+    case "$choice" in
+      0|q|Q) mark_no_change; return 0 ;;
+      1)
+        if restart_service_now ssh; then SESSION_CHANGED=1; ok "SSH 服务已重启"; else rc=1; fi ;;
+      2)
+        if restart_service_now fail2ban; then SESSION_CHANGED=1; ok "fail2ban 已重启"; else rc=1; fi ;;
+      3)
+        if restart_service_now ssh; then SESSION_CHANGED=1; ok "SSH 服务已重启"; else rc=1; fi
+        if restart_service_now fail2ban; then SESSION_CHANGED=1; ok "fail2ban 已重启"; else rc=1; fi ;;
+      *)
+        warn "无效的选择：$choice（请输入 0-3）"
+        continue ;;
+    esac
+    printf '\n'
+    pause_enter
+  done
+}
+
+# ============================== 卸载 / 清理 =================================
+uninstall_shortcut() {
+  local did=0
+  if [ -f "${SHORTCUT_DIR}/${SHORTCUT_NAME}" ]; then
+    if run rm -f "${SHORTCUT_DIR}/${SHORTCUT_NAME}"; then
+      ok "已删除快捷命令：${SHORTCUT_DIR}/${SHORTCUT_NAME}"
+      did=1
+    fi
+  else
+    info "没有找到快捷命令：${SHORTCUT_DIR}/${SHORTCUT_NAME}"
+  fi
+  if [ -d "$CACHE_DIR" ]; then
+    if run rm -rf "$CACHE_DIR"; then
+      ok "已删除脚本缓存：${CACHE_DIR}"
+      did=1
+    fi
+  fi
+  [ "$did" -eq 1 ] && SESSION_CHANGED=1
+  return 0
+}
+
+uninstall_log() {
+  local f=""
+  for f in "$LOG_FILE" "$LEGACY_LOG"; do
+    [ -n "$f" ] || continue
+    [ -f "$f" ] || continue
+    if ask_yn "删除日志文件 $f ？" y; then
+      run rm -f "$f" && { ok "已删除：$f"; SESSION_CHANGED=1; }
+    fi
+  done
+  return 0
+}
+
+uninstall_tools() {
+  local entry pkgs="" p="" list="" skip="" removed=0
+  for entry in "${TOOL_ITEMS[@]}"; do
+    pkgs="${entry%%|*}"
+    case "$pkgs" in
+      fail2ban|timezone|swap|bbr) continue ;;
+    esac
+    for p in $pkgs; do
+      # 这几个卸了可能影响 HTTPS / 软件源，安全起见保留
+      case "$p" in
+        ca-certificates|gnupg) skip="${skip}${skip:+ }${p}"; continue ;;
+      esac
+      if have dpkg && dpkg -s "$p" >/dev/null 2>&1; then
+        list="${list}${list:+ }${p}"
+      fi
+    done
+  done
+
+  if [ -z "$list" ]; then
+    info "没有检测到脚本装过的常用工具。"
+  else
+    info "将要卸载：${list}"
+    if ask_yn "确认卸载上面这些软件包？" n; then
+      # shellcheck disable=SC2086
+      if run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge $list; then
+        ok "已卸载常用工具"
+        removed=1
+      else
+        warn "卸载时有报错，可稍后手动检查"
+      fi
+    else
+      info "已跳过卸载软件包。"
+    fi
+  fi
+  [ -n "$skip" ] && info "已保留（卸载会影响下载 / 证书）：${skip}"
+
+  # CPU 微码（属于"更新过的驱动"）
+  for p in intel-microcode amd64-microcode; do
+    if have dpkg && dpkg -s "$p" >/dev/null 2>&1; then
+      if ask_yn "是否卸载 CPU 微码包 ${p}？（一般是安全更新，卸载后建议重启）" n; then
+        run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "$p" && {
+          ok "已卸载：$p"
+          removed=1
+        }
+      fi
+    fi
+  done
+  info "内核与内核模块不会动（误删可能导致无法开机），需要的话请手动处理。"
+  [ "$removed" -eq 1 ] && SESSION_CHANGED=1
+  return 0
+}
+
+uninstall_configs() {
+  local newest=""
+
+  # SSH：删掉受管配置，回到系统原本的设置
+  if [ -f "$MANAGED_SSHD_CONF" ]; then
+    info "当前受管的 SSH 配置：$(printf '%s' "$(ssh_managed_keys 2>/dev/null)" | tr '\n' ' ')"
+    if ask_yn "删除受管的 SSH 端口配置（${MANAGED_SSHD_CONF}），恢复系统原来的 SSH 设置？" y; then
+      stamp="$(date '+%Y%m%d-%H%M%S')"
+      run cp -a "$MANAGED_SSHD_CONF" "/root/acxc-vps-backup/removed-${stamp}-00-acxc-vps.conf" 2>/dev/null || true
+      if run rm -f "$MANAGED_SSHD_CONF"; then
+        ok "已删除：${MANAGED_SSHD_CONF}"
+        SESSION_CHANGED=1
+      fi
+      if [ -f /etc/ssh/sshd_config ]; then
+        run remove_managed_inline_block /etc/ssh/sshd_config || true
+        if [ "$DRY_RUN" -eq 0 ]; then
+          if ssh_config_ok; then
+            restart_ssh && ok "SSH 已重启，现在使用系统原本的端口"
+          else
+            warn "SSH 配置校验没过，正在从备份还原…"
+            newest="$(find /root/acxc-vps-backup -maxdepth 1 -name '*-ssh' -type d 2>/dev/null | sort -r | head -n 1)"
+            if [ -n "$newest" ]; then
+              LAST_SSH_BACKUP="$newest"
+              ssh_restore_backup && ok "已从备份还原：${newest}"
+            else
+              err "找不到备份，请手动检查 /etc/ssh/sshd_config"
+            fi
+          fi
+        fi
+      fi
+    else
+      info "已跳过 SSH 配置删除。"
+    fi
+  else
+    info "没有找到受管的 SSH 配置。"
+  fi
+
+  # fail2ban 配置（可选卸载软件包）
+  if [ -f "$FAIL2BAN_CONF" ]; then
+    if ask_yn "删除 fail2ban 配置（${FAIL2BAN_CONF}）？" y; then
+      run rm -f "$FAIL2BAN_CONF" && { ok "已删除：${FAIL2BAN_CONF}"; SESSION_CHANGED=1; }
+      if have fail2ban-client; then
+        if ask_yn "是否顺便卸载 fail2ban 软件包？" n; then
+          run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge fail2ban && {
+            ok "已卸载 fail2ban"
+            SESSION_CHANGED=1
+          }
+        else
+          if have systemctl; then run systemctl restart fail2ban || true; fi
+          ok "fail2ban 配置已删除，服务已重启"
+        fi
+      fi
+    fi
+  else
+    info "没有找到 fail2ban 配置。"
+  fi
+
+  # BBR
+  if [ -f "$SYSCTL_BBR_CONF" ]; then
+    if ask_yn "关闭并删除 BBR 设置（${SYSCTL_BBR_CONF}）？" y; then
+      run rm -f "$SYSCTL_BBR_CONF" && { ok "已删除：${SYSCTL_BBR_CONF}"; SESSION_CHANGED=1; }
+      if [ "$DRY_RUN" -eq 0 ]; then
+        sysctl --system >/dev/null 2>&1 || true
+        ok "当前拥塞控制：$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+      fi
+    fi
+  fi
+
+  # Swap
+  if [ -f "$SWAPFILE" ]; then
+    if ask_yn "关闭并删除 Swap 交换文件（${SWAPFILE}）？" y; then
+      run swapoff "$SWAPFILE" 2>/dev/null || true
+      run sed -i '\|# acxc-vps$|d' /etc/fstab || true
+      run rm -f "$SWAPFILE" /etc/sysctl.d/99-acxc-vps-swap.conf && { ok "已删除 Swap 与相关配置"; SESSION_CHANGED=1; }
+    fi
+  fi
+  return 0
+}
+
+uninstall_all() {
+  warn "完全卸载会：删除快捷命令与缓存、受管的 SSH / fail2ban / BBR / Swap 配置、日志、以及脚本装过的工具包。"
+  warn "SSH 会恢复到系统原来的设置（如果原来的端口是 22，请确保 22 已放行，否则可能连不上）。"
+  if ! ask_yn "确认要完全卸载吗？" n; then
+    info "已取消。"
+    return 0
+  fi
+  uninstall_tools
+  uninstall_configs
+  uninstall_log
+  uninstall_shortcut
+  if [ -d /root/acxc-vps-backup ]; then
+    if ask_yn "是否一并删除备份目录 /root/acxc-vps-backup ？（删掉后无法再用脚本回滚）" n; then
+      run rm -rf /root/acxc-vps-backup && { ok "已删除备份目录"; SESSION_CHANGED=1; }
+    fi
+  fi
+  printf '\n'
+  ok "卸载流程已跑完。"
+  info "如果你是把脚本下载到服务器上运行的，最后手动删掉那个文件即可，例如：rm -f ./init.sh"
+  return 0
+}
+
+step_uninstall() {
+  local choice=""
+  while :; do
+    printf '\n%s\n' "  ${C_BLD}卸载 / 清理（可以只做其中几项）：${C_RST}"
+    printf '  %s1)%s 删除快捷命令与脚本缓存（acxc）\n' "${C_GRN}" "${C_RST}"
+    printf '  %s2)%s 卸载脚本装过的常用工具（含 CPU 微码）\n' "${C_GRN}" "${C_RST}"
+    printf '  %s3)%s 删除运行日志\n' "${C_GRN}" "${C_RST}"
+    printf '  %s4)%s 还原 SSH / 删除 fail2ban、BBR、Swap 配置\n' "${C_GRN}" "${C_RST}"
+    printf '  %s5)%s 完全卸载（1-4 全做，并可选删除备份）\n' "${C_YEL}" "${C_RST}"
+    printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
+    printf '\n'
+    if ! read_line "请选择"; then return 1; fi
+    choice="$(trim "$(menu_clean_input "$REPLY")")"
+
+    case "$choice" in
+      0|q|Q) mark_no_change; return 0 ;;
+      1) uninstall_shortcut ;;
+      2) uninstall_tools ;;
+      3) uninstall_log ;;
+      4) uninstall_configs ;;
+      5) uninstall_all ;;
+      *) warn "无效的选择：$choice（请输入 0-5）"; continue ;;
+    esac
+    printf '\n'
+    pause_enter
+  done
+}
+
 # ============================== 状态表 ======================================
-# 性能说明：状态表整块缓存，只有执行过操作才重算；每行的状态一律用"本地快速命令"
-# （dpkg-query / /proc / passwd -S / systemctl），不跑 apt 这类慢命令，所以菜单不卡。
+# 性能说明：状态表整块缓存，只有执行过操作才重算；每行状态只用本地快速命令
+# （dpkg-query / /proc / passwd -S / systemctl），不跑 apt 这类慢命令。
 STATUS_TABLE_CACHE=""
-STATUS_LABELS=()
 
 tools_installed_count() { # "9/10"
   local pkg="" n=0 total=0
@@ -1682,14 +1976,14 @@ swap_total_mb() {
   printf '%s' "$mb"
 }
 
-status_kernel() { # 只用本地命令：当前内核 + 是否已装了更新的内核（需重启）
+status_kernel() { # 只用本地命令：当前内核 + 是否装了更新的内核
   local running="" newest="" out=""
   running="$(uname -r)"
   newest="$(installed_kernel_pkgs 2>/dev/null | grep -E '^linux-image-[0-9]' | sed -e 's|^linux-image-||' | sort -V | tail -n 1)"
   if [ -n "$newest" ] && [ "$newest" != "$running" ]; then
-    out="当前 ${running}，已装 ${newest}（重启后生效）"
+    out="${running} → ${newest}（重启后生效）"
   else
-    out="当前 ${running}（已是最新）"
+    out="${running}（已是最新）"
   fi
   printf '%s' "$out"
 }
@@ -1699,46 +1993,55 @@ status_ssh() {
   p="$(trim "$(current_ssh_ports)")"
   [ -n "$p" ] || p="$(trim "$SSH_M_PORTS")"
   if [ -n "$p" ]; then
-    printf '当前端口 %s' "$p"
+    printf '端口 %s' "$p"
   else
-    printf '未检测到 sshd 配置'
+    printf '端口未知'
   fi
 }
 
 status_passwd() {
-  local line="" st="" d=""
+  local line="" st=""
   line="$(passwd -S root 2>/dev/null)" || line=""
   st="$(printf '%s' "$line" | awk '{print $2}')"
-  d="$(printf '%s' "$line" | awk '{print $3}')"
   case "$st" in
-    P) if [ -n "$d" ]; then printf '已设置（%s）' "$d"; else printf '已设置'; fi ;;
-    L) printf '已锁定' ;;
-    NP) printf '未设置' ;;
-    '') printf '未知' ;;
-    *) printf '状态 %s' "$st" ;;
+    P) printf '密码已设置' ;;
+    L) printf '密码已锁定' ;;
+    NP) printf '密码未设置' ;;
+    '') printf '密码未知' ;;
+    *) printf '密码 %s' "$st" ;;
   esac
 }
 
-status_extras() { # 工具 / fail2ban / Swap / BBR 一行说完
-  local out="" f2b="" sw="" cc=""
+status_extras() {
+  local out="" sw="" cc="" gb=""
   out="工具 $(tools_installed_count)"
   if have fail2ban-client; then
     if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
-      f2b="运行中"
+      out="${out} · fail2ban 运行中"
     else
-      f2b="已装未运行"
+      out="${out} · fail2ban 已停"
     fi
-    out="${out} · fail2ban ${f2b}"
+  else
+    out="${out} · fail2ban 未装"
   fi
   sw="$(swap_total_mb)"
-  if [ "$sw" -gt 0 ]; then out="${out} · Swap ${sw}MB"; fi
+  if [ "$sw" -gt 0 ]; then
+    if [ "$sw" -ge 1024 ]; then
+      gb="$((sw / 1024)).$(((sw % 1024) * 10 / 1024))G"
+      out="${out} · Swap ${gb}"
+    else
+      out="${out} · Swap ${sw}M"
+    fi
+  else
+    out="${out} · 无 Swap"
+  fi
   cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
-  if [ "$cc" = "bbr" ]; then out="${out} · BBR 已开启"; else out="${out} · BBR 未开启"; fi
+  if [ "$cc" = "bbr" ]; then out="${out} · BBR 开"; else out="${out} · BBR 关"; fi
   printf '%s' "$out"
 }
 
-status_access() { # SSH 端口 + root 密码 一行说完
-  printf '%s · 密码%s' "$(status_ssh)" "$(status_passwd)"
+status_access() { # 密码 + 端口，两件一起说
+  printf '%s · %s' "$(status_passwd)" "$(status_ssh)"
 }
 
 status_of() { # $1=步骤标识 → 输出状态文字
@@ -1750,37 +2053,50 @@ status_of() { # $1=步骤标识 → 输出状态文字
   esac
 }
 
+# 状态表里的短名（简洁一点，跟菜单一一对应）
+status_label() { # $1=步骤标识 $2=完整名称
+  case "$1" in
+    sysupdate) printf '内核 / 驱动 / 固件' ;;
+    access)    printf 'root 密码 / SSH 端口' ;;
+    extras)    printf '常用工具 / 网络加速' ;;
+    *)         printf '%s' "$2" ;;
+  esac
+}
+
 show_status_table() {
-  local entry slug title def fn line="" out="" pad=0 i=0 header="" sep=""
+  local entry slug title def fn line="" out="" i=0 w=0 maxw=0 statw=30
+  local -a labels=() statuses=() pads=()
 
   if [ -n "$STATUS_TABLE_CACHE" ]; then
     printf '%s' "$STATUS_TABLE_CACHE"
     return 0
   fi
 
-  # 行名对齐宽度只算一次（disp_width 会起子进程，算一次就够）
-  if [ "${#STATUS_LABELS[@]}" -eq 0 ]; then
-    for entry in "${STEPS[@]}"; do
-      IFS='|' read -r slug title def fn <<<"$entry"
-      pad=$((32 - $(disp_width "$title")))
-      [ "$pad" -lt 1 ] && pad=1
-      STATUS_LABELS+=("$(printf '%s%*s' "$title" "$pad" "")")
-    done
-  fi
-
-  printf -v header '\n  %s  v%s\n' "${C_BLD}${C_CYN}${SCRIPT_NAME}${C_RST}" "$SCRIPT_VERSION"
-  printf -v sep '  %s\n' "──────────────────────────────────── ────────────────────────"
-  out="${header}"
-  out="${out}  ${C_BLD}项目                                 状态${C_RST}
-"
-  out="${out}${sep}"
-  i=0
   for entry in "${STEPS[@]}"; do
     IFS='|' read -r slug title def fn <<<"$entry"
-    line="$(status_of "$slug")"
-    printf -v pad_line '  %s  %s\n' "${STATUS_LABELS[$i]}" "$line"
-    out="${out}${pad_line}"
-    i=$((i + 1))
+    labels+=("$(status_label "$slug" "$title")")
+    statuses+=("$(status_of "$slug")")
+  done
+  for title in "${labels[@]}"; do
+    w="$(disp_width "$title")"
+    [ "$w" -gt "$maxw" ] && maxw="$w"
+  done
+  for line in "${statuses[@]}"; do
+    w="$(disp_width "$line")"
+    [ "$w" -gt "$statw" ] && statw="$w"
+  done
+  for title in "${labels[@]}"; do
+    pads+=("$(printf '%s%*s' "$title" "$((maxw - $(disp_width "$title")))" "")")
+  done
+
+  printf -v out '\n  %s  v%s\n\n' "${C_BLD}${C_CYN}${SCRIPT_NAME}${C_RST}" "$SCRIPT_VERSION"
+  printf -v line '  %s%*s  %s\n' "项目" "$((maxw - 4))" "" "状态"
+  out="${out}${line}"
+  printf -v line '  %s  %s\n' "$(printf '─%.0s' $(seq 1 "$maxw"))" "$(printf '─%.0s' $(seq 1 "$statw"))"
+  out="${out}${line}"
+  for i in "${!labels[@]}"; do
+    printf -v line '  %s  %s\n' "${pads[$i]}" "${statuses[$i]}"
+    out="${out}${line}"
   done
   out="${out}
 "
@@ -1788,38 +2104,32 @@ show_status_table() {
   STATUS_TABLE_CACHE="$out"
   printf '%s' "$out"
 }
+
 invalidate_status() { STATUS_TABLE_CACHE=""; return 0; }
 
-# 清屏并回到最上面（只在真正的终端里清，测试/管道下只换行）
+# 清屏并回到最上面（只在真正的终端里清，测试 / 管道下不做任何事）
 refresh_screen() {
   if [ "$TTY_OK" -eq 1 ] && [ -n "${TERM:-}" ]; then
     clear 2>/dev/null || printf '\033[2J\033[H'
   fi
   return 0
 }
-show_log_tail() { # 看最近的日志
-  local n="${1:-40}"
-  if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
-    printf '\n%s\n' "${C_BLD}最近 ${n} 行日志（$LOG_FILE）：${C_RST}"
-    tail -n "$n" "$LOG_FILE" 2>/dev/null || cat "$LOG_FILE" 2>/dev/null || true
-  else
-    warn "日志文件不存在：${LOG_FILE:-未启用}"
-  fi
-  printf '\n'
-}
-
 # ============================== 操作菜单 ====================================
 show_menu() {
   printf '%s\n' "${C_BLD}${C_CYN}操作菜单${C_RST}"
   printf '  %s\n' "1) 更新内核 / 驱动 / 固件"
-  printf '  %s\n' "2) 修改 SSH 端口 / root 密码"
+  printf '  %s\n' "2) 修改 root 密码 / SSH 端口"
   printf '  %s\n' "3) 安装常用工具 / BBR网络加速 / Swap"
   printf '  %s\n' "4) 查看系统信息"
   printf '  %s\n' "5) 查看运行日志"
   printf '  %s\n' "6) 更新脚本"
+  printf '  %s\n' "7) 重启服务"
+  printf '  %s\n' "8) 卸载 / 清理"
   printf '  %s\n' "0) 退出"
   printf '\n'
 }
+
+# 二级菜单里什么都没做就返回时，调用它标记一下，主菜单就不会再多要一次回车
 menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
   local raw="" cleaned=""
   while :; do
@@ -1841,7 +2151,19 @@ menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
   done
 }
 
-# 菜单循环：每次都清屏重画（菜单回到最上面）→ 选一项 → 执行 → 回来，直到选 0 退出
+show_log_tail() { # 看最近的日志
+  local n="${1:-40}"
+  if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+    printf '\n%s\n' "${C_BLD}最近 ${n} 行日志（$LOG_FILE）：${C_RST}"
+    tail -n "$n" "$LOG_FILE" 2>/dev/null || cat "$LOG_FILE" 2>/dev/null || true
+  else
+    warn "日志文件不存在：${LOG_FILE:-未启用}"
+  fi
+  printf '\n'
+}
+
+mark_no_change() { NO_CHANGE=1; return 0; }
+
 menu_loop() {
   local choice="" n=0
   refresh_screen
@@ -1852,6 +2174,7 @@ menu_loop() {
       break
     fi
     choice="$REPLY"
+    NO_CHANGE=0
 
     case "$choice" in
       0|q|Q|exit|quit)
@@ -1862,11 +2185,16 @@ menu_loop() {
         if plan_add "$(step_slug_by_index "$n")"; then
           run_plan
           invalidate_status
-          pause_enter
+          # 进去看了一眼、什么都没改 → 直接回主菜单，不再多按一次回车
+          if [ "$NO_CHANGE" -eq 1 ]; then
+            refresh_screen
+          else
+            pause_enter
+            refresh_screen
+          fi
         else
           warn "无效的选择：$choice"
         fi
-        refresh_screen
         ;;
       4)
         show_system_info
@@ -1884,8 +2212,18 @@ menu_loop() {
         pause_enter
         refresh_screen
         ;;
+      7)
+        step_restart
+        invalidate_status
+        if [ "$NO_CHANGE" -eq 1 ]; then refresh_screen; else pause_enter; refresh_screen; fi
+        ;;
+      8)
+        step_uninstall
+        invalidate_status
+        if [ "$NO_CHANGE" -eq 1 ]; then refresh_screen; else pause_enter; refresh_screen; fi
+        ;;
       *)
-        warn "无效的选择：$choice（请输入 0-6）"
+        warn "无效的选择：$choice（请输入 0-8）"
         ;;
     esac
   done
@@ -2004,63 +2342,47 @@ print_summary() {
   local i=0 total=${#RESULT_NAMES[@]}
   FAILED_COUNT=0
   if [ "$total" -eq 0 ]; then
-    info "本次没有执行任何操作。"
     return 0
   fi
-  title "执行结果汇总"
-  while [ "$i" -lt "$total" ]; do
-    if [ "${RESULT_STATES[$i]}" = "0" ]; then
-      printf '  %s  %s\n' "${C_GRN}[成功]${C_RST}" "${RESULT_NAMES[$i]}"
+  title "执行结果"
+  for i in "${!RESULT_NAMES[@]}"; do
+    if [ "${RESULT_STATES[$i]}" -eq 0 ]; then
+      printf '  %s[成功]%s %s\n' "${C_GRN}" "${C_RST}" "${RESULT_NAMES[$i]}"
     else
-      printf '  %s  %s\n' "${C_RED}[失败]${C_RST}" "${RESULT_NAMES[$i]}"
+      printf '  %s[失败]%s %s\n' "${C_RED}" "${C_RST}" "${RESULT_NAMES[$i]}"
       FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
-    i=$((i + 1))
   done
   printf '\n'
-  if [ "$FAILED_COUNT" -eq 0 ]; then
-    ok "全部 ${total} 个步骤执行成功。"
-  else
-    warn "有 ${FAILED_COUNT} 个步骤失败。"
-  fi
+  return 0
 }
-
 print_next_steps() {
-  local new="" keep="" cur_port=""
+  local keep=""
 
-  if [ -n "$SSH_PORT_CHANGED" ] || [ -n "$SSH_M_PORTS" ] || [ -n "$NEW_ROOT_PASSWORD" ]; then
-    title "接下来请注意"
-  else
-    return 0
-  fi
+  # 这次什么都没改 → 不啰嗦
+  [ "$SESSION_CHANGED" -eq 1 ] || return 0
+
+  title "接下来请注意"
+  keep="$(trim "$(printf '%s' "$SSH_M_PORTS" | awk '{$1=""; sub(/^ +/,""); print}')")"
 
   if [ -n "$NEW_ROOT_PASSWORD" ] || [ -n "$SSH_PORT_CHANGED" ]; then
     printf '%s\n' "  ${C_BLD}${C_GRN}★ 本次设置（请现在保存好）：${C_RST}"
     [ -n "$NEW_ROOT_PASSWORD" ] && printf '     %sroot 密码：%s%s\n' "${C_BLD}" "$NEW_ROOT_PASSWORD" "${C_RST}"
-    if [ -n "$SSH_PORT_CHANGED" ]; then
-      printf '     %sSSH 端口：%s%s\n' "${C_BLD}" "$SSH_PORT_CHANGED" "${C_RST}"
-    else
-      cur_port="$(trim "$(current_ssh_ports)")"
-      [ -n "$cur_port" ] && printf '     SSH 端口：%s（本次未改动）\n' "$cur_port"
-    fi
+    [ -n "$SSH_PORT_CHANGED" ] && printf '     %sSSH 端口：%s%s\n' "${C_BLD}" "$SSH_PORT_CHANGED" "${C_RST}"
     printf '\n'
   fi
 
-  if [ -n "$SSH_M_PORTS" ]; then
-    new="$(printf '%s' "$SSH_M_PORTS" | awk '{print $1}')"
-    keep="$(printf '%s' "$SSH_M_PORTS" | awk '{$1=""; sub(/^ +/,""); print}')"
-    keep="$(trim "$keep")"
-    printf '  * 先不要关闭当前会话，另开一个终端执行：ssh -p %s root@<服务器IP>\n' "$new"
-    printf '  * 云服务商控制台的「安全组 / 防火墙」也要放行 %s/TCP，否则连不上\n' "$new"
+  if [ -n "$SSH_PORT_CHANGED" ]; then
+    printf '  * 先不要关闭当前会话，另开一个终端执行：ssh -p %s root@<服务器IP>\n' "$SSH_PORT_CHANGED"
+    printf '  * 云服务商控制台的「安全组 / 防火墙」也要放行 %s/TCP，否则连不上\n' "$SSH_PORT_CHANGED"
     [ -n "$keep" ] && printf '  * 过渡期保留的旧端口：%s（验证新端口能登录后再删掉）\n' "$keep"
+    [ -n "$LAST_SSH_BACKUP" ] && printf '  * 万一连不上：用 VNC / 云控制台登录后执行 cp -a %s/. /etc/ssh/ && systemctl restart ssh\n' "$LAST_SSH_BACKUP"
   fi
-
-  if [ -n "$NEW_ROOT_PASSWORD" ] && [ "$NEW_ROOT_PASSWORD" = "$DEFAULT_ROOT_PASSWORD" ]; then
-    printf '  * %s默认密码容易被猜到，建议尽快改成自己的强密码（菜单第 2 项）%s\n' "${C_YEL}" "${C_RST}"
+  if [ -n "$NEW_ROOT_PASSWORD" ]; then
+    printf '  * 新密码登录：ssh -p %s root@<服务器IP>\n' "${SSH_PORT_CHANGED:-$(trim "$(current_ssh_ports)")}"
+    [ "$NEW_ROOT_PASSWORD" = "$DEFAULT_ROOT_PASSWORD" ] && printf '  * %s默认密码容易被猜到，建议尽快改成自己的强密码（菜单第 2 项）%s\n' "${C_YEL}" "${C_RST}"
   fi
-  if [ -n "$LAST_SSH_BACKUP" ]; then
-    printf '  * 万一连不上：用 VNC / 云控制台登录后执行 cp -a %s/. /etc/ssh/ && systemctl restart ssh\n' "$LAST_SSH_BACKUP"
-  fi
+  [ "$NEED_REBOOT" -eq 1 ] && printf '  * 装好了新内核 / 驱动，重启后才会生效（菜单 0 退出时会再问一次）\n'
   printf '  * 再次运行本脚本可随时追加 / 调整设置（重复执行是安全的）\n'
   printf '\n'
   return 0
@@ -2202,14 +2524,14 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
   -V, --version        显示版本号
 
 菜单:
-  1) 更新内核 / 驱动 / 固件        2) 修改 SSH 端口
-  3) 修改 root 密码                4) 安装常用工具 / BBR网络加速 / Swap
-  5) 查看系统信息                  6) 查看运行日志
-  7) 更新脚本（拉最新发布版）       8) 全部按默认执行（1 2 3）
-  0) 退出
+  1) 更新内核 / 驱动 / 固件        2) 修改 root 密码 / SSH 端口
+  3) 安装常用工具 / BBR网络加速 / Swap
+  4) 查看系统信息                  5) 查看运行日志
+  6) 更新脚本（拉最新发布版）       7) 重启服务
+  8) 卸载 / 清理                   0) 退出
 
 步骤标识（--only / --skip 用）:
-  sysupdate  ssh-port  root-passwd  extras
+  sysupdate  access  extras   （--only ssh-port / root-passwd 仍兼容，等同 access）
 
 安全提示:
   * 改 SSH 端口前，请先在云服务商控制台的安全组放行新端口，并保持当前会话不要断开。
