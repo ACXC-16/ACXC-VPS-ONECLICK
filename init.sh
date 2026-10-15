@@ -176,14 +176,22 @@ ui_init_size() {
   fi
   case "$UI_LINES" in ''|*[!0-9]*) UI_LINES=24 ;; esac
   case "$UI_COLS" in ''|*[!0-9]*) UI_COLS=80 ;; esac
-  [ "$UI_LINES" -lt 12 ] && UI_LINES=24
-  [ "$UI_COLS" -lt 60 ] && UI_COLS=80
   UI_W=$((UI_COLS - 4))
   [ "$UI_W" -gt 78 ] && UI_W=78
-  [ "$UI_W" -lt 56 ] && UI_W=56
-  UI_H=$((UI_LINES - 8))
+  [ "$UI_W" -lt 40 ] && UI_W=40
+  UI_H=$((UI_LINES - 10))
   [ "$UI_H" -gt 16 ] && UI_H=16
-  [ "$UI_H" -lt 8 ] && UI_H=8
+  [ "$UI_H" -lt 6 ] && UI_H=6
+  return 0
+}
+
+# 图形界面出错 → 永久退回文字问答，绝不静默丢答案或退出
+ui_fallback() {
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    warn "图形界面出错，已自动切换为文字问答模式（后面的问题都用文字）"
+    _log_raw UI "图形界面出错，降级为 plain"
+    UI_BACKEND="plain"
+  fi
   return 0
 }
 
@@ -259,6 +267,15 @@ ui_detect() {
   fi
 
   ui_init_size
+  # 终端太小就别用图形界面了（whiptail 会显示不全甚至直接失败）
+  if [ "$UI_COLS" -lt 60 ] || [ "$UI_LINES" -lt 14 ]; then
+    if [ "$UI_MODE" = "whiptail" ]; then
+      warn "终端尺寸只有 ${UI_COLS}x${UI_LINES}，图形界面可能显示不全（继续尝试）"
+    else
+      info "终端尺寸 ${UI_COLS}x${UI_LINES} 偏小，改用文字问答模式"
+      return 0
+    fi
+  fi
   if ui_selftest; then
     UI_BACKEND="whiptail"
     _log_raw UI "使用图形界面（whiptail）"
@@ -293,8 +310,11 @@ _prompt_secret() { # $1=提示语 → REPLY（不回显）
   if [ "$UI_BACKEND" = "whiptail" ]; then
     local rc=0
     _ui_run --title "vps-init" --passwordbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" || rc=$?
-    [ "$rc" -eq 0 ] || return 1
-    return 0
+    case "$rc" in
+      0) return 0 ;;
+      1|255) return 1 ;;
+      *) ui_fallback ;;
+    esac
   fi
   if [ "$TTY_OK" -eq 1 ]; then
     IFS= read -r -s -p "$p" line < /dev/tty || return 1
@@ -328,7 +348,7 @@ ask_yn() {
     case "$rc" in
       0) _log_raw ANSWER "$q -> Y"; return 0 ;;
       1) _log_raw ANSWER "$q -> N"; return 1 ;;
-      *) warn "图形界面异常（退出码 ${rc}），本次按「否」处理"; return 1 ;;
+      *) ui_fallback ;;
     esac
   fi
   hint="[y/N]"; [ "$def" = y ] && hint="[Y/n]"
@@ -363,15 +383,19 @@ ask_value() {
       tries=$((tries + 1))
       rc=0
       _ui_run --title "vps-init" --inputbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" "$def" || rc=$?
-      if [ "$rc" -ne 0 ]; then
+      if [ "$rc" -eq 0 ]; then
+        if [ -n "$REPLY" ]; then return 0; fi
+        if [ -n "$def" ]; then REPLY="$def"; return 0; fi
+        warn "输入不能为空"
+        continue
+      fi
+      if [ "$rc" -eq 1 ] || [ "$rc" -eq 255 ]; then
         warn "已取消输入"
         return 1
       fi
-      if [ -n "$REPLY" ]; then return 0; fi
-      if [ -n "$def" ]; then REPLY="$def"; return 0; fi
-      warn "输入不能为空"
+      ui_fallback
+      break
     done
-    return 1
   fi
   while :; do
     if ! _prompt_line "  $p" "$def"; then
@@ -1380,9 +1404,14 @@ build_plan_tui() {
   _ui_run --title "vps-init · 选择要执行的步骤" --separate-output \
     --checklist "空格 = 勾选/取消    方向键 = 移动    Tab = 切到 <Ok>    回车 = 确认\n\n标 ON 的是推荐默认项，不想做的取消勾选即可。" \
     "$h" "$UI_W" "$listh" "${args[@]}" || rc=$?
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -eq 1 ] || [ "$rc" -eq 255 ]; then
     warn "已取消选择，未做任何修改。"
     exit 0
+  fi
+  if [ "$rc" -ne 0 ]; then
+    # 界面本身出问题：降级成文字问答，不静默退出
+    ui_fallback
+    return 1
   fi
   if [ -z "$REPLY" ]; then
     warn "没有勾选任何步骤，退出。"
@@ -1412,10 +1441,9 @@ build_plan() {
     return 0
   fi
 
-  # 图形界面：一屏勾选
+  # 图形界面：一屏勾选（界面出错会自动降级，继续走下面的文字流程）
   if [ "$UI_BACKEND" = "whiptail" ]; then
-    build_plan_tui
-    return 0
+    if build_plan_tui; then return 0; fi
   fi
 
   title "可执行步骤（共 ${total} 项）"
