@@ -108,11 +108,28 @@ rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --port 99
 check "退出码" "1" "$rc"
 check_has "报端口不合法" "$CUR_OUT" "端口不合法"
 
-echo "== 5) root 密码：自动生成随机密码 =="
+echo "== 5) root 密码：无人值守默认不改，必须显式指定 =="
 CUR_OUT="$WORK/c.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only root-passwd)"
 check "退出码" "0" "$rc"
-check_has "dry-run 拦住 chpasswd" "$CUR_OUT" "chpasswd"
+check_has "无人值守默认不改密码" "$CUR_OUT" "无人值守模式（--yes）不会自动修改 root 密码"
+if grep -qF 'chpasswd' "$CUR_OUT"; then bad "不应执行 chpasswd"; else ok "没有执行 chpasswd"; fi
+
+CUR_OUT="$WORK/c2.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --gen-password --only root-passwd)"
+check "显式 --gen-password 退出码" "0" "$rc"
+check_has "生成模式会执行 chpasswd" "$CUR_OUT" "chpasswd"
+check_has "生成前会先显示密码" "$CUR_OUT" "即将设置的 root 随机密码"
+
+CUR_OUT="$WORK/c3.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --password 'MySecret12345' --only root-passwd)"
+check "显式 --password 退出码" "0" "$rc"
+check_has "指定密码会执行 chpasswd" "$CUR_OUT" "chpasswd"
+if grep -qF 'MySecret12345' "$CUR_OUT"; then
+  bad "命令行传入的明文密码不应出现在输出里"
+else
+  ok "明文密码没有被打到输出里"
+fi
 
 echo "== 6) root 密码：两次输入不一致应重试 =="
 CUR_OUT="$WORK/i.out"

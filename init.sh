@@ -52,6 +52,9 @@ NEED_REBOOT=0
 FAILED_COUNT=0
 OS_PRETTY="未知"
 LAST_SSH_BACKUP=""
+OPT_PASSWORD=""
+GEN_PASSWORD=0
+NEW_ROOT_PASSWORD=""
 
 # 界面：auto = 有 whiptail 就用图形界面，否则回退文字问答；whiptail / plain = 强制
 UI_MODE="${VPS_INIT_UI:-auto}"
@@ -1005,15 +1008,35 @@ step_root_password() {
   warn "改密码请务必先确认：当前会话不要断开，最好用另一个终端保持登录状态。"
   info "当前 root 密码状态：$(passwd -S root 2>/dev/null || printf '未知')"
 
-  if [ "$ASSUME_YES" -eq 1 ]; then
+  if [ -n "$OPT_PASSWORD" ]; then
+    pw="$OPT_PASSWORD"
+    if [ "${#pw}" -lt 8 ]; then warn "--password 只有 ${#pw} 位，建议至少 8 位"; fi
+    info "使用命令行 --password 指定的密码（注意：它可能留在 shell 历史里，稍后建议执行 history -c 或删除该行）"
+  elif [ "$GEN_PASSWORD" -eq 1 ]; then
     gen=1
+  elif [ "$ASSUME_YES" -eq 1 ]; then
+    # 关键安全设计：无人值守时绝不偷偷改密码，否则你就拿到了一个自己不知道的密码
+    warn "无人值守模式（--yes）不会自动修改 root 密码 —— 避免生成一个你不知道的密码导致自己失联。"
+    info "确实要改的话请显式指定：--password '你的新密码'  或  --gen-password（生成后会把密码显示出来）"
+    return 0
   elif ask_yn "是否自动生成随机强密码？（选 N 则手动输入）" n; then
     gen=1
   fi
 
   if [ "$gen" -eq 1 ]; then
     pw="$(gen_password 24)" || { err "生成随机密码失败"; return 1; }
-  else
+    # 先生成、先给你看，确认记下来之后才真正生效
+    printf '\n%s\n' "${C_BLD}${C_YEL}  ★ 即将设置的 root 随机密码（只显示这一次）：${C_RST}"
+    printf '%s\n\n' "${C_BLD}      ${pw}${C_RST}"
+    if [ "$UI_BACKEND" = "whiptail" ]; then
+      _ui_run --title "请先保存这个密码" --msgbox "即将设置的 root 新密码：\n\n    ${pw}\n\n脚本不会把它写进日志，也只显示这一次。\n请先复制保存，再点 <Ok>。" "$UI_H" "$UI_W" || true
+    fi
+    if ! ask_yn "已经记下这个密码了，确认现在修改 root 密码？" y; then
+      info "已取消：root 密码保持不变。"
+      pw=""
+      return 0
+    fi
+  elif [ -z "$OPT_PASSWORD" ]; then
     while :; do
       if ! _prompt_secret "  请输入新的 root 密码（不回显，至少 8 位）: "; then
         err "读取密码失败"
@@ -1056,6 +1079,7 @@ step_root_password() {
   fi
 
   if [ "$gen" -eq 1 ]; then
+    NEW_ROOT_PASSWORD="$pw"   # 最后汇总时再显示一次，防止中途刷屏看不到
     printf '\n%s\n' "${C_BLD}${C_YEL}  ★ 新生成的 root 密码（只显示这一次，请立即保存）：${C_RST}"
     printf '%s\n\n' "${C_BLD}      $pw${C_RST}"
   else
@@ -1532,6 +1556,9 @@ print_summary() {
 print_next_steps() {
   local new="" keep=""
   title "接下来请注意"
+  if [ -n "$NEW_ROOT_PASSWORD" ]; then
+    printf '  * %s\n' "${C_BLD}${C_YEL}root 密码（本次由脚本生成，请立刻保存！）：${NEW_ROOT_PASSWORD}${C_RST}"
+  fi
   if [ -n "$SSH_M_PORTS" ]; then
     new="$(printf '%s' "$SSH_M_PORTS" | awk '{print $1}')"
     keep="$(printf '%s' "$SSH_M_PORTS" | awk '{$1=""; sub(/^ +/,""); print}')"
@@ -1551,6 +1578,16 @@ print_next_steps() {
   printf '  * 日志文件：%s\n' "${LOG_FILE:-未启用}"
   printf '  * 再次运行本脚本可随时追加/调整设置（重复执行是安全的）\n'
   printf '\n'
+  # 图形模式：最后再弹一次关键信息，防止刷屏看漏导致失联
+  if [ "$UI_BACKEND" = "whiptail" ]; then
+    local tips=""
+    if [ -n "$NEW_ROOT_PASSWORD" ]; then tips="${tips}root 密码：${NEW_ROOT_PASSWORD}\n\n"; fi
+    if [ -n "$new" ]; then tips="${tips}SSH 端口：${new}\n"; fi
+    if [ -n "$tips" ]; then
+      _ui_run --title "请保存这些信息" --msgbox "本次改动的关键信息：\n\n${tips}\n请复制保存后再关闭窗口。" "$UI_H" "$UI_W" || true
+    fi
+  fi
+  return 0
 }
 
 maybe_reboot() {
@@ -1663,7 +1700,11 @@ vps-init —— Ubuntu / Debian VPS 初始化交互式脚本
   curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
 
 选项:
-  -y, --yes            全部询问自动用默认值回答（无人值守；root 密码会自动生成随机密码）
+  -y, --yes            全部询问自动用默认值回答（无人值守）
+                       ★ --yes 不会自动修改 root 密码：避免给你设置一个自己不知道的密码。
+                         要改密码必须显式加 --password '新密码' 或 --gen-password。
+      --password <密码> 明确指定新的 root 密码（会留在 shell 历史里，用完记得清）
+      --gen-password   明确要求生成随机 root 密码：先把密码显示给你确认，确认后才生效
       --port <端口>    直接指定新的 SSH 端口（跳过询问，默认 52052）
       --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
       --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
@@ -1698,6 +1739,9 @@ parse_args() {
       -y|--yes) ASSUME_YES=1 ;;
       --port) shift; OPT_PORT="${1:-}"; [ -n "$OPT_PORT" ] || die "--port 需要一个参数" ;;
       --port=*) OPT_PORT="${1#*=}" ;;
+      --password) shift; OPT_PASSWORD="${1:-}"; [ -n "$OPT_PASSWORD" ] || die "--password 需要一个参数" ;;
+      --password=*) OPT_PASSWORD="${1#*=}" ;;
+      --gen-password) GEN_PASSWORD=1 ;;
       --only) shift; ONLY_LIST="${1:-}"; [ -n "$ONLY_LIST" ] || die "--only 需要一个参数" ;;
       --only=*) ONLY_LIST="${1#*=}" ;;
       --skip) shift; SKIP_LIST="${1:-}"; [ -n "$SKIP_LIST" ] || die "--skip 需要一个参数" ;;
