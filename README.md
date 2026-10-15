@@ -1,17 +1,16 @@
 # vps-init
 
-Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（图形化菜单），改错会失联的操作（SSH 端口、root 密码）带备份、校验和自动回滚。
+Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可视化菜单），改错会失联的操作（SSH 端口、root 密码）带备份、校验和自动回滚。
+
+在 VPS 上以 root 执行这一条即可（内容锁定在最新 Release，不会因为你以后改代码而变）：
 
 ```bash
-# 稳定版（推荐）：指向最新的 Release，内容锁定不变，也带 SHA256 校验文件
 curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
-
-# 最新开发版：跟随 main 分支，随时是最新提交
-curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
 ```
 
-> 当前版本 **v1.0.3**，发布页：<https://github.com/qinjing-arch/VPS-init/releases>
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.3` 即可。
+> 当前版本 **v1.0.3** · 发布页 <https://github.com/qinjing-arch/VPS-init/releases>
+> 界面按键不灵（方向键变 `^[[C` 乱码）就加 `--menu`；想用老式 `[Y/n]` 加 `--text`：在 `sudo bash` 后面补 `-s -- --menu` 即可。
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.3`。
 
 ---
 
@@ -96,15 +95,20 @@ curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh 
 
 ## 一键使用
 
-在 VPS 上以 root 执行（二选一）：
+在 VPS 上以 root 执行这一条（复制即用）：
 
 ```bash
-# 方式 1：下载后交给 sudo bash
-curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
-
-# 方式 2：进程替换（效果一样，有些面板里更稳）
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh)
+curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
 ```
+
+需要额外参数（比如只更新驱动、用编号菜单）时这样加：
+
+```bash
+curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --menu --only sysupdate
+```
+
+> 想用**跟随 main 分支的最新提交**（而不是锁定版本）：
+> `curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash`
 
 脚本会从 `/dev/tty` 读取你的回答，所以 `curl | bash` 这种管道执行方式下交互依然正常。
 
@@ -150,7 +154,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/m
 
 ```bash
 # 先演练一遍，看看会做什么
-curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash -s -- --dry-run
+curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash -s -- --dry-run
 
 # 只更新系统 + 改 SSH 端口，端口用 52052
 sudo bash init.sh --only sysupdate,ssh-port --port 52052
