@@ -692,60 +692,132 @@ installed_kernel_pkgs() { # 已安装的内核/驱动/固件包
     grep -E "$KERNEL_PKG_RE" | sort -u
 }
 
-step_sysupdate() {
-  local rc=0 pkgs="" cnt=0
+# ==================== 步骤 1：更新内核 / 驱动 / 固件 ========================
+# 把可升级的包分成三类，让用户按 1 / 2 / 3 勾选（可多选，编号之间用空格隔开）
+kernel_pkg_group() { # $1=包名 → driver|firmware|kernel
+  case "$1" in
+    *microcode*|linux-modules-extra*) printf 'driver' ;;
+    linux-firmware*)                  printf 'firmware' ;;
+    *)                                printf 'kernel' ;;
+  esac
+}
 
-  info "1/3 刷新软件源索引（只更新索引，不动任何软件）…"
+step_sysupdate() {
+  local rc=0 all="" p="" line="" sel="" tok="" ok=1
+  local driver="" firmware="" kernel="" picked=""
+  local -a chosen=()
+  local -a g_names=("驱动（CPU 微码 / 驱动模块）" "固件（firmware）" "内核（image / modules / headers）")
+
+  info "1/2 刷新软件源索引（只更新索引，不动任何软件）…"
   if ! run env DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::Retries=3; then
     err "apt update 失败：请检查网络 / 软件源 / 磁盘空间"
     return 1
   fi
 
-  info "2/3 升级内核 / 驱动 / 固件…"
+  info "2/2 检查可升级的项目…"
   if have apt; then
-    pkgs="$(upgradable_kernel_pkgs)"
+    all="$(upgradable_kernel_pkgs)"
   else
-    pkgs="$(installed_kernel_pkgs)"
+    all="$(installed_kernel_pkgs)"
   fi
 
-  if [ -z "$pkgs" ]; then
-    ok "内核 / 驱动 / 固件已经是最新，无需升级。"
-  else
-    cnt="$(printf '%s\n' "$pkgs" | grep -c . || true)"
-    info "发现 ${cnt} 个可升级的包："
-    printf '%s\n' "$pkgs" | sed 's/^/    /'
+  if [ -z "$all" ]; then
+    ok "内核 / 驱动 / 固件都已经是最新，无需升级。"
+    return 0
+  fi
+
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$(kernel_pkg_group "$p")" in
+      driver)   driver="${driver}${driver:+ }${p}" ;;
+      firmware) firmware="${firmware}${firmware:+ }${p}" ;;
+      *)        kernel="${kernel}${kernel:+ }${p}" ;;
+    esac
+  done <<<"$all"
+
+  # 组名按显示宽度补齐（中文算 2 列），只算一次
+  local -a g_label=()
+  for p in "${g_names[@]}"; do
+    local gp=$((34 - $(disp_width "$p")))
+    [ "$gp" -lt 1 ] && gp=1
+    g_label+=("$(printf '%s%*s' "$p" "$gp" "")")
+  done
+
+  while :; do
+    printf '\n%s\n' "  ${C_BLD}可升级的项目：${C_RST}"
+    printf '  %s1)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[0]}" "${driver:-（无）}"
+    printf '  %s2)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[1]}" "${firmware:-（无）}"
+    printf '  %s3)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[2]}" "${kernel:-（无）}"
+    printf '  %s0)%s 返回（什么都不做）\n' "${C_DIM}" "${C_RST}"
+    printf '\n'
+    info "要升级哪几项就输入哪几个编号，多个编号之间要用空格隔开（例如：1 3）；直接回车＝全升级"
+    if ! read_line "请选择"; then return 1; fi
+
+    if [ -z "$(trim "$REPLY")" ]; then
+      picked="1 2 3"
+    else
+      sel="$(trim "$(menu_clean_input "$REPLY")")"
+      case "$sel" in
+        0|q|Q) return 0 ;;
+      esac
+      ok=1
+      picked=""
+      # shellcheck disable=SC2086
+      for tok in $(printf '%s' "$sel" | tr ' ' '\n'); do
+        [ -n "$tok" ] || continue
+        case "$tok" in
+          *[!0-9]*) ok=0; break ;;
+        esac
+        if [ "$tok" -lt 1 ] || [ "$tok" -gt 3 ]; then ok=0; break; fi
+        case " $picked " in
+          *" $tok "*) ;;
+          *) picked="${picked}${picked:+ }${tok}" ;;
+        esac
+      done
+      if [ "$ok" -eq 1 ] && [ -n "$picked" ]; then break; fi
+      warn "编号不对：请输入 1 / 2 / 3，多个编号之间用空格隔开（例如：1 3）"
+      continue
+    fi
+    break
+  done
+
+  # shellcheck disable=SC2086
+  for tok in $(printf '%s' "$picked" | tr ' ' '\n'); do
+    case "$tok" in
+      1) chosen+=("$driver") ;;
+      2) chosen+=("$firmware") ;;
+      3) chosen+=("$kernel") ;;
+    esac
+  done
+
+  printf '\n'
+  for line in "${chosen[@]}"; do
+    line="$(trim "$line")"
+    if [ -z "$line" ]; then
+      info "选中的项目里有一项没有可升级的包，跳过。"
+      continue
+    fi
+    info "升级：$(printf '%s' "$line" | tr '\n' ' ')"
     # shellcheck disable=SC2086
     if run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 \
-      apt-get -y install --only-upgrade $pkgs \
+      apt-get -y install --only-upgrade $line \
       -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
       -o Dpkg::Lock::Timeout=900; then
-      ok "内核 / 驱动 / 固件升级完成"
+      ok "升级完成"
     else
-      warn "升级过程中出现错误，请查看上方输出与日志：${LOG_FILE:-未启用}"
+      warn "升级过程中出现错误"
       rc=1
     fi
-  fi
+  done
 
-  info "3/3 检查是否需要重启…"
   if [ -f "$REBOOT_REQUIRED_FILE" ]; then
     NEED_REBOOT=1
-    warn "系统需要重启才能加载新内核/驱动。"
-    if [ -s "${REBOOT_REQUIRED_FILE}.pkgs" ]; then
-      info "触发重启的包：$(tr '\n' ' ' <"${REBOOT_REQUIRED_FILE}.pkgs")"
-    fi
-  else
-    ok "不需要重启。"
+    warn "系统需要重启才能加载新内核 / 驱动。"
   fi
-
   ok "完成（当前运行内核：$(uname -r)）"
   return "$rc"
 }
 # ============================== 步骤 2：SSH 端口 ============================
-# ==================== 步骤 2：修改 SSH 端口 / root 密码 ====================
-# 说明：询问部分（ssh_ask_port / passwd_ask）和执行部分（ssh_apply_port /
-# passwd_apply）分开写，这样"默认设置"和"自定义"两条路都能复用同一套安全逻辑：
-# 备份 → 写入 → sshd -t/-T 校验 → 失败自动回滚。
-
 # 询问新端口 → SSH_NEW_PORT / SSH_KEEP_OLD（失败返回 1）
 ssh_ask_port() {
   local old_ports="" new_port="" ssherr="" keep_old=0
@@ -1064,61 +1136,90 @@ passwd_apply() {
   return 0
 }
 
-# 菜单里的第 2 项：默认设置 / 自定义 / 不修改
+
+# ==================== 步骤 2：修改 SSH 端口 / root 密码 ====================
+# 没有二级菜单：第一步问端口（直接回车＝52052），第二步问密码（直接回车＝不修改）
 step_access() {
-  local rc=0 choice=""
+  local rc=0 pw="" p2=""
 
   if [ "$ASSUME_YES" -eq 1 ]; then
     ssh_ask_port || rc=1
     passwd_ask || rc=1
-  else
-    printf '\n  %s\n' "${C_BLD}当前：SSH 端口 $(trim "$(current_ssh_ports)") · root 密码 $(status_passwd)${C_RST}"
-    printf '  %s\n' "1) 使用默认设置（SSH 端口 ${DEFAULT_SSH_PORT}，root 密码 ${DEFAULT_ROOT_PASSWORD}）"
-    printf '  %s\n' "2) 自定义（分别输入端口和密码）"
-    printf '  %s\n' "0) 不修改，返回"
-    if ! menu_read_choice; then return 1; fi
-    choice="$REPLY"
-
-    case "$choice" in
-      0|q|Q)
-        info "已返回：SSH 端口和 root 密码都保持原样。"
-        return 0 ;;
-      1)
-        SSH_OLD_PORTS="$(trim "$(current_ssh_ports)")"
-        SSH_NEW_PORT="$DEFAULT_SSH_PORT"
-        SSH_KEEP_OLD=1
-        PASSWD_NEW="$DEFAULT_ROOT_PASSWORD"
-        PASSWD_GEN=0
-        warn "使用默认设置：SSH 端口 ${DEFAULT_SSH_PORT} + 脚本内置的默认 root 密码（稍后会在结束界面显示）"
-        info "提醒：默认密码容易被猜到，登录成功后建议尽快改成你自己的强密码（本菜单选 2 自定义）。"
-        ;;
-      2)
-        if ! ssh_ask_port; then
-          warn "跳过 SSH 端口修改（读不到 SSH 配置或已取消），继续处理 root 密码"
-          SSH_NEW_PORT=""
-        fi
-        passwd_ask || return 1
-        ;;
-      *)
-        warn "无效的选择：$choice（请输入 0 / 1 / 2）"
-        return 1 ;;
-    esac
+    if [ -n "$SSH_NEW_PORT" ]; then
+      if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
+        SSH_PORT_CHANGED="$SSH_NEW_PORT"
+      else
+        rc=1
+      fi
+    fi
+    if [ -n "$PASSWD_NEW" ]; then
+      passwd_apply "$PASSWD_NEW" "$PASSWD_GEN" || rc=1
+    fi
+    return "$rc"
   fi
 
-  if [ -n "$SSH_NEW_PORT" ]; then
+  # ---------- 1) SSH 端口 ----------
+  printf '\n%s\n' "  ${C_BLD}第一步：修改 SSH 端口${C_RST}"
+  if ssh_ask_port; then
     if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
       SSH_PORT_CHANGED="$SSH_NEW_PORT"
     else
       rc=1
     fi
   else
-    info "SSH 端口保持不变。"
+    warn "已跳过 SSH 端口修改。"
   fi
-  if [ -n "$PASSWD_NEW" ]; then
-    passwd_apply "$PASSWD_NEW" "$PASSWD_GEN" || rc=1
+
+  # ---------- 2) root 密码 ----------
+  printf '\n%s\n' "  ${C_BLD}第二步：修改 root 密码${C_RST}"
+  info "当前 root 密码状态：$(passwd -S root 2>/dev/null || printf '未知')"
+  warn "改密码前请确认当前会话不要断开，最好保持另一个终端已登录。"
+  info "直接回车＝不修改 root 密码；如果想用脚本默认密码，就输入：${DEFAULT_ROOT_PASSWORD}"
+  if ! _prompt_secret "  请输入新的 root 密码（回车＝不修改）: "; then
+    warn "读取密码失败，已跳过 root 密码修改。"
+    return "$rc"
+  fi
+  pw="$REPLY"
+
+  if [ -z "$pw" ]; then
+    info "没有输入密码：root 密码保持不变。"
   else
-    info "root 密码保持不变。"
+    case "$pw" in
+      *[$'\n\r']*) warn "密码不能包含换行符，已跳过 root 密码修改"; return "$rc" ;;
+    esac
+    if [ "${#pw}" -lt 8 ]; then
+      warn "密码长度至少 8 位（当前 ${#pw} 位），已跳过 root 密码修改"
+      return "$rc"
+    fi
+    # 不是默认密码时要求再输一遍，避免打错把自己锁在外面
+    if [ "$pw" != "$DEFAULT_ROOT_PASSWORD" ]; then
+      if ! _prompt_secret "  请再次输入以确认: "; then
+        warn "读取密码失败，已跳过 root 密码修改。"
+        return "$rc"
+      fi
+      p2="$REPLY"
+      if [ "$pw" != "$p2" ]; then
+        warn "两次输入不一致，已跳过 root 密码修改。"
+        return "$rc"
+      fi
+    fi
+    passwd_apply "$pw" 0 || rc=1
   fi
+  pw=""; p2=""
+
+  printf '\n'
+  if [ -n "$SSH_PORT_CHANGED" ] || [ -n "$NEW_ROOT_PASSWORD" ]; then
+    printf '%s\n' "  ${C_BLD}${C_GRN}本次改动：${C_RST}"
+    [ -n "$SSH_PORT_CHANGED" ] && printf '     SSH 端口 → %s\n' "$SSH_PORT_CHANGED"
+    if [ -n "$NEW_ROOT_PASSWORD" ]; then
+      printf '     root 密码 → %s\n' "$NEW_ROOT_PASSWORD"
+    else
+      printf '     root 密码 → 未修改\n'
+    fi
+  else
+    printf '%s\n' "  ${C_BLD}本次没有做任何修改。${C_RST}"
+  fi
+  printf '\n'
   return "$rc"
 }
 
@@ -1336,117 +1437,129 @@ EOF
   fi
   return 0
 }
-# ============ 步骤 4：常用工具 / BBR网络加速 / Swap =======================
-# 每项都可以单独选，[推荐] 的项在"直接回车"时会默认处理
+# ============ 步骤 3：安装常用工具 / BBR网络加速 / Swap ===================
+# 顺序按「使用人数 + 重要性」排；多选时编号之间要用空格隔开
 TOOL_ITEMS=(
   "curl wget ca-certificates gnupg|基础组件（下载 / 证书 / 密钥）|y"
-  "vim nano|文本编辑器|y"
   "htop tmux lsof|进程 / 会话 / 文件占用查看|y"
-  "git rsync unzip zip|同步与压缩打包|y"
-  "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|y"
+  "vim nano|文本编辑器|y"
+  "git rsync unzip zip|同步 / 压缩打包|y"
+  "fail2ban|fail2ban 防 SSH 暴力破解|y"
   "bash-completion|命令自动补全（Tab 补全更好用）|y"
-  "net-tools dnsutils mtr-tiny traceroute|网络诊断（排障用）|n"
-  "fail2ban|fail2ban 防 SSH 暴力破解|n"
+  "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|y"
   "timezone|设置时区（默认 Asia/Shanghai）|y"
   "swap|创建 Swap 交换文件|y"
   "bbr|开启 BBR 网络加速|y"
+  "net-tools dnsutils mtr-tiny traceroute|网络诊断（排障用）|n"
 )
 
 step_extras() {
-  local i=0 sel="" raw="" line="" tok="" ok=1 rcp=0
-  local -a g_pkgs=() g_title=() g_rec=()
-  local entry pkgs title rec
+  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0 marker=""
+  local -a g_pkgs=() g_title=() g_rec=() g_label=()
+  local entry pkgs="" title="" rec="" sel=""
 
   for entry in "${TOOL_ITEMS[@]}"; do
     IFS='|' read -r pkgs title rec <<<"$entry"
-    i=$((i + 1))
     g_pkgs+=("$pkgs"); g_title+=("$title"); g_rec+=("$rec")
-    if [ "$rec" = y ]; then
-      printf '  %s%2d)%s %-38s %s\n' "${C_GRN}" "$i" "${C_RST}" "$title" "${C_DIM}[推荐]${C_RST}"
-    else
-      printf '  %s%2d)%s %-38s %s\n' "${C_DIM}" "$i" "${C_RST}" "$title" "${C_DIM}[按需]${C_RST}"
-    fi
   done
-  printf '\n'
-  info "输入要安装的编号（可多选，例如：1 3）；直接回车＝只装 [推荐] 的项；a＝全部；0＝返回"
+
+  # 行名按显示宽度补齐（中文算 2 列），只算一次，保证 [推荐] 那一列是对齐的
+  for i in "${!g_title[@]}"; do
+    pad=$((32 - $(disp_width "${g_title[$i]}")))
+    [ "$pad" -lt 1 ] && pad=1
+    g_label+=("$(printf '%s%*s' "${g_title[$i]}" "$pad" "")")
+  done
 
   while :; do
+    printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
+    for i in "${!g_title[@]}"; do
+      if [ "${g_rec[$i]}" = y ]; then
+        marker="${C_GRN}推荐${C_RST}"
+      else
+        marker="${C_DIM}按需${C_RST}"
+      fi
+      printf '  %s%2d)%s %s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "$marker"
+    done
+    printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
+    printf '\n'
+    info "多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部"
+
     if ! read_line "请选择"; then return 1; fi
-    raw="$REPLY"
-    line="$(trim "$(menu_clean_input "$raw")")"
+    raw="${REPLY}"
+
     if [ -z "$(trim "$raw")" ]; then
+      PLAN_TOOLS=()
       for i in "${!g_pkgs[@]}"; do
         [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
       done
-      break
-    fi
-    if [ -z "$line" ]; then
-      warn "没认出输入来：请直接输入编号，例如 1 3"
-      continue
-    fi
-    case "$line" in
-      0|q|Q) info "已返回。"; return 0 ;;
-      a|A|all|ALL) for i in "${!g_pkgs[@]}"; do plan_tool_add "$i"; done; break ;;
-    esac
-    PLAN_TOOLS=()
-    ok=1
-    # shellcheck disable=SC2086
-    for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
-      case "$tok" in
-        ''|*[!0-9]*) ok=0; break ;;
-      esac
-      if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#g_pkgs[@]}" ]; then ok=0; break; fi
-      plan_tool_add "$((tok - 1))"
-    done
-    if [ "$ok" -eq 1 ] && [ "${#PLAN_TOOLS[@]}" -gt 0 ]; then break; fi
-    warn "编号不对，请输入 1-${#g_pkgs[@]} 之间的数字，例如：1 3"
-  done
-
-  if [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
-    info "没有选择任何项，返回。"
-    return 0
-  fi
-
-  # 处理选中的项目：软件包 → fail2ban → 时区 / Swap / BBR
-  for i in "${PLAN_TOOLS[@]}"; do
-    pkgs="${g_pkgs[$i]}"
-    title="${g_title[$i]}"
-    case "$pkgs" in
-      fail2ban)
-        info "安装配置 fail2ban…"
-        step_fail2ban || rcp=1
-        continue ;;
-      timezone)
-        set_timezone || rcp=1
-        continue ;;
-      swap)
-        setup_swap || rcp=1
-        continue ;;
-      bbr)
-        enable_bbr || rcp=1
-        continue ;;
-    esac
-    info "安装：${title}（$(printf '%s' "$pkgs" | tr -s ' ')）"
-    # shellcheck disable=SC2086
-    if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
-      ok "已安装：${title}"
     else
-      warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
-      for sel in $pkgs; do
-        run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$sel" >/dev/null 2>&1 || {
-          warn "安装失败：$sel"
-          rcp=1
-        }
-      done
+      line="$(trim "$(menu_clean_input "$raw")")"
+      case "$line" in
+        0|q|Q) return 0 ;;
+        a|A|all|ALL)
+          PLAN_TOOLS=()
+          for i in "${!g_pkgs[@]}"; do plan_tool_add "$i"; done ;;
+        *)
+          PLAN_TOOLS=()
+          ok=1
+          # shellcheck disable=SC2086
+          for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
+            [ -n "$tok" ] || continue
+            case "$tok" in
+              *[!0-9]*) ok=0; break ;;
+            esac
+            if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#g_pkgs[@]}" ]; then ok=0; break; fi
+            plan_tool_add "$((tok - 1))"
+          done
+          if [ "$ok" -ne 1 ] || [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
+            warn "编号不对：请输入 1-${#g_pkgs[@]}，多个编号之间用空格隔开（例如：1 3）"
+            continue
+          fi ;;
+      esac
+    fi
+
+    [ "${#PLAN_TOOLS[@]}" -eq 0 ] && continue
+
+    printf '\n'
+    for i in "${PLAN_TOOLS[@]}"; do
+      pkgs="${g_pkgs[$i]}"
+      title="${g_title[$i]}"
+      case "$pkgs" in
+        fail2ban)
+          info "安装配置 fail2ban…"
+          step_fail2ban || rcp=1
+          continue ;;
+        timezone)
+          set_timezone || rcp=1
+          continue ;;
+        swap)
+          setup_swap || rcp=1
+          continue ;;
+        bbr)
+          enable_bbr || rcp=1
+          continue ;;
+      esac
+      info "安装：${title}（$(printf '%s' "$pkgs" | tr -s ' ')）"
+      # shellcheck disable=SC2086
+      if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
+        ok "已安装：${title}"
+      else
+        warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
+        for sel in $pkgs; do
+          run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$sel" >/dev/null 2>&1 || {
+            warn "安装失败：$sel"
+            rcp=1
+          }
+        done
+      fi
+    done
+    printf '\n'
+    if [ "$rcp" -eq 0 ]; then
+      ok "处理完了（可以接着选，输入 0 回主菜单）。"
+    else
+      warn "有部分项目没装上，可稍后重试（输入 0 回主菜单）。"
     fi
   done
-
-  if [ "$rcp" -eq 0 ]; then
-    ok "选中的项目都处理完了。"
-  else
-    warn "有部分项目没装上，可稍后重试。"
-  fi
-  return 0
 }
 # ============================== 计划与执行 ==================================
 list_steps() {
@@ -1899,58 +2012,50 @@ print_summary() {
   if [ "$FAILED_COUNT" -eq 0 ]; then
     ok "全部 ${total} 个步骤执行成功。"
   else
-    warn "有 ${FAILED_COUNT} 个步骤失败，请查看上方输出与日志：${LOG_FILE:-未启用}"
+    warn "有 ${FAILED_COUNT} 个步骤失败。"
   fi
 }
 
 print_next_steps() {
   local new="" keep="" cur_port=""
-  title "接下来请注意"
 
-  # 本次设置的端口 / 密码：统一在这里完整列一次
-  if [ -n "$SSH_PORT_CHANGED" ] || [ -n "$NEW_ROOT_PASSWORD" ]; then
-    printf '%s\n' "  ${C_BLD}${C_GRN}★ 本次为你设置的信息（请现在保存好）：${C_RST}"
-    if [ -n "$NEW_ROOT_PASSWORD" ]; then
-      printf '     %sroot 密码：%s%s\n' "${C_BLD}" "$NEW_ROOT_PASSWORD" "${C_RST}"
-    fi
+  if [ -n "$SSH_PORT_CHANGED" ] || [ -n "$SSH_M_PORTS" ] || [ -n "$NEW_ROOT_PASSWORD" ]; then
+    title "接下来请注意"
+  else
+    return 0
+  fi
+
+  if [ -n "$NEW_ROOT_PASSWORD" ] || [ -n "$SSH_PORT_CHANGED" ]; then
+    printf '%s\n' "  ${C_BLD}${C_GRN}★ 本次设置（请现在保存好）：${C_RST}"
+    [ -n "$NEW_ROOT_PASSWORD" ] && printf '     %sroot 密码：%s%s\n' "${C_BLD}" "$NEW_ROOT_PASSWORD" "${C_RST}"
     if [ -n "$SSH_PORT_CHANGED" ]; then
       printf '     %sSSH 端口：%s%s\n' "${C_BLD}" "$SSH_PORT_CHANGED" "${C_RST}"
-    elif [ -n "$NEW_ROOT_PASSWORD" ]; then
+    else
       cur_port="$(trim "$(current_ssh_ports)")"
       [ -n "$cur_port" ] && printf '     SSH 端口：%s（本次未改动）\n' "$cur_port"
     fi
     printf '\n'
   fi
 
-  if [ -n "$NEW_ROOT_PASSWORD" ]; then
-    printf '  * 用新密码登录：ssh -p %s root@<服务器IP>\n' "${SSH_PORT_CHANGED:-$(trim "$(current_ssh_ports)")}"
-    if [ "$NEW_ROOT_PASSWORD" = "$DEFAULT_ROOT_PASSWORD" ]; then
-      printf '  * %s默认密码容易被猜到，建议尽快改成自己的强密码（本脚本第 2 项 → 自定义）%s\n' "${C_YEL}" "${C_RST}"
-    fi
-  fi
-
   if [ -n "$SSH_M_PORTS" ]; then
     new="$(printf '%s' "$SSH_M_PORTS" | awk '{print $1}')"
     keep="$(printf '%s' "$SSH_M_PORTS" | awk '{$1=""; sub(/^ +/,""); print}')"
     keep="$(trim "$keep")"
-    printf '  * SSH 端口：%s' "$new"
-    if [ -n "$keep" ]; then printf '（过渡期保留：%s）' "$keep"; fi
-    printf '\n'
-    printf '     1) 先不要关闭当前会话，另开一个终端执行：ssh -p %s root@<服务器IP>\n' "$new"
-    printf '     2) 云服务商控制台的「安全组 / 防火墙」也要放行 %s/TCP，否则连不上\n' "$new"
-    if [ -n "$keep" ]; then
-      printf '     3) 验证新端口能登录后，编辑 %s 删掉多余的 Port 行，再执行 systemctl restart ssh\n' "$MANAGED_SSHD_CONF"
-    fi
-    if [ -n "$LAST_SSH_BACKUP" ]; then
-      printf '     4) 万一连不上：用 VNC/控制台登录后执行 cp -a %s/. /etc/ssh/ && systemctl restart ssh\n' "$LAST_SSH_BACKUP"
-    fi
+    printf '  * 先不要关闭当前会话，另开一个终端执行：ssh -p %s root@<服务器IP>\n' "$new"
+    printf '  * 云服务商控制台的「安全组 / 防火墙」也要放行 %s/TCP，否则连不上\n' "$new"
+    [ -n "$keep" ] && printf '  * 过渡期保留的旧端口：%s（验证新端口能登录后再删掉）\n' "$keep"
   fi
-  printf '  * 日志文件：%s（不含明文密码）\n' "${LOG_FILE:-未启用}"
-  printf '  * 再次运行本脚本可随时追加/调整设置（重复执行是安全的）\n'
+
+  if [ -n "$NEW_ROOT_PASSWORD" ] && [ "$NEW_ROOT_PASSWORD" = "$DEFAULT_ROOT_PASSWORD" ]; then
+    printf '  * %s默认密码容易被猜到，建议尽快改成自己的强密码（菜单第 2 项）%s\n' "${C_YEL}" "${C_RST}"
+  fi
+  if [ -n "$LAST_SSH_BACKUP" ]; then
+    printf '  * 万一连不上：用 VNC / 云控制台登录后执行 cp -a %s/. /etc/ssh/ && systemctl restart ssh\n' "$LAST_SSH_BACKUP"
+  fi
+  printf '  * 再次运行本脚本可随时追加 / 调整设置（重复执行是安全的）\n'
   printf '\n'
   return 0
 }
-
 maybe_reboot() {
   local need=0 p=""
   if [ -f "$REBOOT_REQUIRED_FILE" ]; then need=1; fi
@@ -2056,8 +2161,7 @@ show_system_info() {
   fi
   kv "根分区" "$(df -hP / 2>/dev/null | awk 'END{printf "%s 总 / %s 可用（已用 %s）", $2, $4, $5}')"
   kv "SSH 端口" "$(trim "$(current_ssh_ports)")"
-  kv "日志文件" "${LOG_FILE:-未启用}"
-  if [ "$DRY_RUN" -eq 1 ]; then kv "运行模式" "dry-run（不修改系统）"; fi
+ if [ "$DRY_RUN" -eq 1 ]; then kv "运行模式" "dry-run（不修改系统）"; fi
   if [ "$ASSUME_YES" -eq 1 ]; then kv "应答方式" "--yes（全部用默认值）"; fi
 }
 
@@ -2191,7 +2295,7 @@ main() {
   return 0
 }
 
-trap 'printf "\n"; err "已被中断（Ctrl+C）。已执行的步骤不会自动回滚，请查看日志：${LOG_FILE:-未启用}"; exit 130' INT
+trap 'printf "\n"; err "已被中断（Ctrl+C）。已执行的步骤不会自动回滚。"; exit 130' INT
 
 main "$@"
 exit $?
