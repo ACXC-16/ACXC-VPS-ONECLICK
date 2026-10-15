@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  tests/smoke.sh —— vps-init 冒烟测试
+#  tests/smoke.sh —— VPS新机一键脚本-acxc16 冒烟测试
 #
 #  特点：全部在 --dry-run 下运行，不修改系统，可以在本地或 CI 里安全执行。
 #  用法：bash tests/smoke.sh      （退出码 0 = 全部通过）
@@ -274,7 +274,7 @@ printf 'check:sysupdate\nyes\nno\nno\nno\n' >"$WORK/ans-a"
 CUR_OUT="$WORK/tui-a.out"
 rc="$(tui_case "$CUR_OUT" "$WORK/ans-a" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
 check "勾选流程退出码" "0" "$rc"
-check_has "弹出的第一个框是步骤勾选清单" "$CUR_OUT.log" "checklist|vps-init · 选择要执行的步骤"
+check_has "弹出的第一个框是步骤勾选清单" "$CUR_OUT.log" "checklist|VPS新机一键脚本-acxc16 · 选择要执行的步骤"
 check_has "勾选界面写明了按键方式" "$CUR_OUT.log" "空格 = 勾选/取消"
 check_has "是否框写明了按键方式" "$CUR_OUT.log" "Tab 或 ← → 切换按钮"
 check_has "只执行勾选的步骤" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"

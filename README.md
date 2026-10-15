@@ -1,4 +1,4 @@
-# vps-init
+# VPS新机一键脚本-acxc16
 
 Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（可视化菜单），改错会失联的操作（SSH 端口、root 密码）带备份、校验和自动回滚。
 
@@ -10,20 +10,28 @@ curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh 
 
 > 不是 root（或习惯 sudo）：把 `| bash` 换成 `| sudo bash`；要带参数：`… | bash -s -- --dry-run`
 
-**更省事（可选，装一次以后只敲 `vps-init`）** —— 整段复制执行一次：
+**更省事（可选，装一次以后只敲 `vpsnew`）** —— 整段复制执行一次：
 
 ```bash
-cat > /usr/local/bin/vps-init <<'EOF'
+cat > /usr/local/bin/vpsnew <<'EOF'
 #!/bin/sh
-curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh -o /tmp/vps-init.sh && exec bash /tmp/vps-init.sh "$@"
+curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh -o /tmp/vpsnew.sh && exec bash /tmp/vpsnew.sh "$@"
 EOF
-chmod +x /usr/local/bin/vps-init
+chmod +x /usr/local/bin/vpsnew
 ```
 
-以后直接 `vps-init`（每次自动拉最新版，参数照常：`vps-init --dry-run`）。
+以后直接 psnew（每次自动拉最新版，参数照常：psnew --dry-run）。命令名想换成别的（比如 cxc16），把上面三行里的 psnew 全替换即可。
 
-> 当前版本 **v1.0.7** · 发布页 <https://github.com/ACXC-16/VPS-init/releases>
-> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.7`。
+> 当前版本 **V1.0.0** · 发布页 <https://github.com/ACXC-16/VPS-init/releases>
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.0`。
+
+### 关于名字
+
+| 叫什么 | 值 | 说明 |
+| --- | --- | --- |
+| 脚本显示名 | **VPS新机一键脚本-acxc16** | 运行横幅、方框标题、`--version` 都用这个名字 |
+| 仓库（URL） | `ACXC-16/VPS-init` | 保留 ASCII：中文仓库名在链接里会变成 `%E6%96%B0...` 这种转义，一键命令会长到没法用 |
+| 服务器上的内部文件名 | 仍是 `vps-init` 前缀 | `/var/log/vps-init.log`、`/etc/ssh/sshd_config.d/00-vps-init.conf`、`/etc/fail2ban/jail.d/vps-init.local`、`/root/vps-init-backup/` 这些**已经在你机器上生效**，改名会留下孤儿配置（尤其 SSH 的 Port 会变成两个文件都在设，优先级容易出错），所以保持不变 |
 
 ---
 
@@ -408,8 +416,8 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 git add -A && git commit -m "feat: 新增 xxx" && git push
 
 # 2) 打个版本号 tag 并推送 —— GitHub 会自动跑测试、创建 Release、附上 init.sh
-git tag -a v1.0.7 -m "vps-init v1.0.7"
-git push origin v1.0.7
+git tag -a v1.0.0 -m "VPS新机一键脚本-acxc16 V1.0.0"
+git push origin v1.0.0
 ```
 
 发布完成后：
