@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  tests/smoke.sh —— VPS新机一键脚本-acxc16 冒烟测试
+#  tests/smoke.sh —— ACXC16-VPS新机一键脚本 冒烟测试
 #
 #  特点：全部在 --dry-run 下运行，不修改系统，可以在本地或 CI 里安全执行。
 #  用法：bash tests/smoke.sh      （退出码 0 = 全部通过）
 #
 #  在 GitHub Actions 里运行时，每个失败项会额外抛出 ::error:: 注解，
-#  这样失败原因可以直接在仓库的 Checks / Annotations 里看到，不必翻日志。
+#  失败原因可以直接在仓库的 Checks / Annotations 里看到，不必翻日志。
 # =============================================================================
 set -u
 
@@ -36,9 +36,8 @@ CUR_OUT=""
 
 one_line() { printf '%s' "$1" | tr '\n' ' '; }
 
-# 从输出文件里挑出最有信息量的几行，用于注解
 diag() {
-  grep -E '\[错误\]|\[注意\]|Port |退出码|dry-run' "$1" 2>/dev/null |
+  grep -E '\[错误\]|\[注意\]|\[信息\]|状态|步骤' "$1" 2>/dev/null |
     tail -n 4 | tr '\n' '|' | sed 's/|/ | /g' | cut -c1-600
 }
 
@@ -63,6 +62,10 @@ check_has() { # $1=说明 $2=输出文件 $3=关键字
   if grep -qF -- "$3" "$2"; then ok "$1"; else bad "$1（输出里没找到「$3」）"; fi
 }
 
+check_hasnt() { # $1=说明 $2=输出文件 $3=不该出现的关键字
+  if grep -qF -- "$3" "$2"; then bad "$1（不应出现「$3」）"; else ok "$1"; fi
+}
+
 run_case() { # $1=输出文件，其余为参数；stdin 透传给被测脚本
   local out="$1"
   shift
@@ -79,6 +82,7 @@ CUR_OUT="$WORK/help.out"
 rc="$(run_case "$CUR_OUT" "$ROOT/init.sh" --help)"
 check "--help 退出码" "0" "$rc"
 check_has "--help 含用法" "$CUR_OUT" "用法:"
+check_has "--help 用新名字" "$CUR_OUT" "ACXC16-VPS新机一键脚本"
 CUR_OUT="$WORK/list.out"
 rc="$(run_case "$CUR_OUT" "$ROOT/init.sh" --list)"
 check "--list 退出码" "0" "$rc"
@@ -86,6 +90,7 @@ check_has "--list 列出 sysupdate" "$CUR_OUT" "sysupdate"
 CUR_OUT="$WORK/ver.out"
 rc="$(run_case "$CUR_OUT" "$ROOT/init.sh" --version)"
 check "--version 退出码" "0" "$rc"
+check_has "--version 版本号" "$CUR_OUT" "v1.0.0"
 
 echo "== 2) 端口校验循环：abc / 70000 应被拒绝，52052 通过 =="
 CUR_OUT="$WORK/a.out"
@@ -103,7 +108,7 @@ check "退出码" "0" "$rc"
 check_has "使用指定端口" "$CUR_OUT" "Port 2222"
 
 echo "== 4) --port 越界应报错 =="
-CUR_OUT="$WORK/bad.out"
+CUR_OUT="$WORK/bad-port.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --port 99999 --only ssh-port)"
 check "退出码" "1" "$rc"
 check_has "报端口不合法" "$CUR_OUT" "端口不合法"
@@ -113,7 +118,7 @@ CUR_OUT="$WORK/c.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only root-passwd)"
 check "退出码" "0" "$rc"
 check_has "无人值守默认不改密码" "$CUR_OUT" "无人值守模式（--yes）不会自动修改 root 密码"
-if grep -qF 'chpasswd' "$CUR_OUT"; then bad "不应执行 chpasswd"; else ok "没有执行 chpasswd"; fi
+check_hasnt "没有执行 chpasswd" "$CUR_OUT" "chpasswd"
 
 CUR_OUT="$WORK/c2.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --gen-password --only root-passwd)"
@@ -125,11 +130,7 @@ CUR_OUT="$WORK/c3.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --password 'MySecret12345' --only root-passwd)"
 check "显式 --password 退出码" "0" "$rc"
 check_has "指定密码会执行 chpasswd" "$CUR_OUT" "chpasswd"
-if grep -qF 'MySecret12345' "$CUR_OUT"; then
-  bad "命令行传入的明文密码不应出现在输出里"
-else
-  ok "明文密码没有被打到输出里"
-fi
+check_hasnt "命令行明文密码不打到输出里" "$CUR_OUT" "MySecret12345"
 
 echo "== 6) root 密码：两次输入不一致应重试 =="
 CUR_OUT="$WORK/i.out"
@@ -138,20 +139,66 @@ rc="$(printf 'y\nn\nabc12345\nxyz98765\nTestPass123\nTestPass123\n' |
 check "退出码" "0" "$rc"
 check_has "提示两次不一致" "$CUR_OUT" "两次输入不一致"
 
-echo "== 7) 纯文字问答（--text）：逐项 y/n =="
-CUR_OUT="$WORK/d.out"
-rc="$(printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --text)"
+echo "== 7) 交互菜单：状态表 + 编号菜单，选 0 退出 =="
+CUR_OUT="$WORK/menu0.out"
+rc="$(printf '0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
-check_has "只执行 tuning" "$CUR_OUT" "时区 / Swap / BBR 网络加速"
-check_has "跳过了 sysupdate" "$CUR_OUT" "已跳过：只更新内核 / 驱动 / 固件"
+check_has "显示脚本名与版本" "$CUR_OUT" "ACXC16-VPS新机一键脚本  v1.0.0"
+check_has "显示状态表表头" "$CUR_OUT" "项目"
+check_has "显示操作菜单" "$CUR_OUT" "操作菜单"
+check_has "菜单里有 1)" "$CUR_OUT" "1) 只更新内核 / 驱动 / 固件"
+check_has "菜单里有 0) 退出" "$CUR_OUT" "0) 退出"
+check_has "没做任何操作时如实说明" "$CUR_OUT" "本次没有执行任何操作"
+check_hasnt "没有 whiptail 方框" "$CUR_OUT" "whiptail"
 
-echo "== 8) 步骤失败要如实汇总并返回 1 =="
+echo "== 8) 状态表内容：每项都有状态 =="
+CUR_OUT="$WORK/status.out"
+rc="$(printf '0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "内核状态" "$CUR_OUT" "内核 "
+check_has "SSH 端口状态" "$CUR_OUT" "当前端口 22"
+check_has "fail2ban 状态" "$CUR_OUT" "未安装"
+check_has "时区/Swap/TCP 状态" "$CUR_OUT" "时区 "
+check_has "常用工具统计" "$CUR_OUT" "常用工具 "
+
+echo "== 9) 菜单里的无效输入 / 方向键乱码 / 全角数字 =="
+CUR_OUT="$WORK/menu-bad.out"
+rc="$(printf 'x\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "无效输入后退出码" "0" "$rc"
+check_has "提示无效选择" "$CUR_OUT" "无效的选择"
+
+CUR_OUT="$WORK/menu-esc.out"
+rc="$(printf '\033[A\033[B\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "方向键乱码后退出码" "0" "$rc"
+check_has "提示没认出输入" "$CUR_OUT" "没认出输入来"
+
+CUR_OUT="$WORK/menu-fw.out"
+rc="$(printf '８\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "全角数字退出码" "0" "$rc"
+check_has "全角 ８ 被识别为查看日志" "$CUR_OUT" "最近 40 行日志"
+
+echo "== 10) 菜单 7 = 查看系统信息 =="
+CUR_OUT="$WORK/menu7.out"
+rc="$(printf '7\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "查看系统信息退出码" "0" "$rc"
+check_has "打印了系统信息" "$CUR_OUT" "==== 系统信息 ===="
+
+echo "== 11) 菜单 9 = 全部按默认执行 =="
+CUR_OUT="$WORK/menu9.out"
+# 前面 6 个空行让各步骤的问题都走默认值，最后两行给 root 密码的两遍输入
+rc="$(printf '9\n\n\n\n\n\n\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "全部执行退出码" "0" "$rc"
+check_has "提示按默认项执行" "$CUR_OUT" "按默认项执行：1、2、3"
+check_has "计划里是 3 项" "$CUR_OUT" "步骤 1/3"
+check_has "最后一项也执行到" "$CUR_OUT" "步骤 3/3"
+
+echo "== 12) 步骤失败要如实汇总并返回 1 =="
 CUR_OUT="$WORK/e.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-missing.sh" --force --dry-run --yes --only ssh-port)"
 check "退出码" "1" "$rc"
 check_has "汇总里有失败项" "$CUR_OUT" "[失败]"
 
-echo "== 9) 参数校验 =="
+echo "== 13) 参数校验 =="
 CUR_OUT="$WORK/f.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only nope)"
 check "--only 未知步骤仍可运行" "0" "$rc"
@@ -164,7 +211,7 @@ CUR_OUT="$WORK/h.out"
 rc="$(run_case "$CUR_OUT" "$ROOT/init.sh" --port)"
 check "--port 缺参数退出码" "1" "$rc"
 
-echo "== 10) 受管配置回读（跨次运行不互相覆盖） =="
+echo "== 14) 受管 SSH 配置回读（跨次运行不互相覆盖） =="
 CUR_OUT="$WORK/unit.out"
 cat >"$FAKE/sshd_config.d/00-vps-init.conf" <<'EOF'
 # --- vps-init managed block: start ---
@@ -184,256 +231,23 @@ bash "$WORK/unit.sh" >"$CUR_OUT" 2>&1
 check_has "回读端口列表" "$CUR_OUT" "PORTS=[52052 22]"
 check_has "回读 PermitRootLogin" "$CUR_OUT" "PRL=[yes]"
 
-echo "== 11) sysupdate 默认只动内核/驱动，其它软件包不动 =="
+echo "== 15) sysupdate 默认只动内核/驱动，其它软件包不动 =="
 CUR_OUT="$WORK/k.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
 check "退出码" "0" "$rc"
 check_has "明确只升级内核/驱动/固件" "$CUR_OUT" "只升级内核 / 驱动 / 固件"
 check_has "全量升级默认不执行" "$CUR_OUT" "保持不动：本次不升级其它软件包"
-check_has "清理默认不执行" "$CUR_OUT" "是否清理不再需要的依赖包（apt autoremove --purge）？ -> N"
 
-echo "== 12) 图形界面 --ui=whiptail：勾选 / 输入框 / 取消 =="
-mkdir -p "$WORK/bin"
-cat >"$WORK/bin/whiptail" <<'MOCK'
-#!/usr/bin/env bash
-# 测试用的 mock whiptail：不画界面，按顺序从 MOCK_ANSWERS 文件里取答案，
-# 结果写到 stderr（与真实 whiptail 的约定一致）。
-set -u
-ANSWERS="${MOCK_ANSWERS:?需要设置 MOCK_ANSWERS}"
-IDX_FILE="${MOCK_ANSWERS}.idx"
-idx=0
-[ -f "$IDX_FILE" ] && idx="$(cat "$IDX_FILE")"
-idx=$((idx + 1))
-printf '%s' "$idx" >"$IDX_FILE"
-answer="$(sed -n "${idx}p" "$ANSWERS")"
-
-type=""
-title=""
-text=""
-prev=""
-for a in "$@"; do
-  case "$prev" in
-    --yesno|--msgbox|--checklist|--inputbox|--passwordbox) text="$a" ;;
-  esac
-  case "$a" in
-    --yesno) type=yesno ;;
-    --inputbox|--passwordbox) type=input ;;
-    --checklist) type=checklist ;;
-    --msgbox) type=msgbox ;;
-  esac
-  [ "$prev" = "--title" ] && title="$a"
-  prev="$a"
-done
-
-# 记一笔"弹过什么框、写了什么"，便于断言
-if [ -n "${MOCK_LOG:-}" ]; then
-  printf '%s|%s|%s\n' "$type" "$title" "$text" >>"$MOCK_LOG"
-fi
-
-case "$type" in
-  yesno)
-    case "$answer" in
-      yes) exit 0 ;;
-      no) exit 1 ;;
-      *) exit 255 ;;
-    esac ;;
-  input)
-    case "$answer" in
-      ok:*) printf '%s' "${answer#ok:}" >&2; exit 0 ;;
-      *) exit 1 ;;
-    esac ;;
-  checklist)
-    case "$answer" in
-      check:*)
-        printf '%s\n' "${answer#check:}" | tr ',' '\n' >&2
-        exit 0 ;;
-      *) exit 1 ;;
-    esac ;;
-  msgbox)
-    case "$answer" in
-      ok) exit 0 ;;
-      *) exit 1 ;;
-    esac ;;
-  *) exit 0 ;;
-esac
-MOCK
-chmod +x "$WORK/bin/whiptail"
-
-tui_case() { # $1=输出文件 $2=答案文件，其余为参数
-  local out="$1" ans="$2"
-  shift 2
-  rm -f "$ans.idx" "$out.log"
-  MOCK_ANSWERS="$ans" MOCK_LOG="$out.log" PATH="$WORK/bin:$PATH" \
-    VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
-    bash "$@" >"$out" 2>&1
-  printf '%s' "$?"
-}
-
-# A：勾选只跑 sysupdate，后续三个可选项都答否
-printf 'check:sysupdate\nyes\nno\nno\nno\n' >"$WORK/ans-a"
-CUR_OUT="$WORK/tui-a.out"
-rc="$(tui_case "$CUR_OUT" "$WORK/ans-a" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
-check "勾选流程退出码" "0" "$rc"
-check_has "弹出的第一个框是步骤勾选清单" "$CUR_OUT.log" "checklist|VPS新机一键脚本-acxc16 · 选择要执行的步骤"
-check_has "勾选界面写明了按键方式" "$CUR_OUT.log" "空格 = 勾选/取消"
-check_has "是否框写明了按键方式" "$CUR_OUT.log" "Tab 或 ← → 切换按钮"
-check_has "只执行勾选的步骤" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
-check_has "全量升级仍默认否" "$CUR_OUT" "保持不动：本次不升级其它软件包"
-
-# B：在勾选界面按取消
-printf 'cancel\n' >"$WORK/ans-b"
-CUR_OUT="$WORK/tui-b.out"
-rc="$(tui_case "$CUR_OUT" "$WORK/ans-b" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
-check "取消后正常退出" "0" "$rc"
-check_has "提示已取消" "$CUR_OUT" "已取消选择"
-
-# C：勾选界面一个都不选
-printf 'check:\n' >"$WORK/ans-c"
-CUR_OUT="$WORK/tui-c.out"
-rc="$(tui_case "$CUR_OUT" "$WORK/ans-c" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail)"
-check "空勾选正常退出" "0" "$rc"
-check_has "提示没有勾选" "$CUR_OUT" "没有勾选任何步骤"
-
-# D：输入框填端口（确认框 yes → 输入框 52052 → 过渡期 yes → 提示框 ok）
-printf 'yes\nok:52052\nyes\nok\n' >"$WORK/ans-d"
-CUR_OUT="$WORK/tui-d.out"
-rc="$(tui_case "$CUR_OUT" "$WORK/ans-d" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail --only ssh-port)"
-check "输入框流程退出码" "0" "$rc"
-check_has "输入框的值传进端口配置" "$CUR_OUT" "Port 52052"
-check_has "弹出了改端口提示框" "$CUR_OUT.log" "msgbox|改 SSH 端口前的检查"
-
-# E：输入框按取消 → 步骤失败、退出码 1
-printf 'yes\ncancel\n' >"$WORK/ans-e"
-CUR_OUT="$WORK/tui-e.out"
-rc="$(tui_case "$CUR_OUT" "$WORK/ans-e" "$WORK/init-fake.sh" --force --dry-run --ui=whiptail --only ssh-port)"
-check "取消输入后步骤失败" "1" "$rc"
-check_has "提示已取消输入" "$CUR_OUT" "已取消输入"
-
-echo "== 13) 图形界面挂掉时要自动降级为文字问答，不能静默退出 =="
-mkdir -p "$WORK/bin-fail"
-cat >"$WORK/bin-fail/whiptail" <<'MOCK'
-#!/usr/bin/env bash
-# 模拟"界面不可用"：任何调用都返回错误码 3
-exit 3
-MOCK
-chmod +x "$WORK/bin-fail/whiptail"
-CUR_OUT="$WORK/tui-fail.out"
-printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
-  PATH="$WORK/bin-fail:$PATH" VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
-    bash "$WORK/init-fake.sh" --force --dry-run --ui=whiptail >"$CUR_OUT" 2>&1
-rc=$?
-check "降级后仍然跑完" "0" "$rc"
-check_has "提示已降级" "$CUR_OUT" "已改用文字问答"
-check_has "降级后仍能正常执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
-
-echo "== 14) 图形界面等不到操作（超时）也要自动降级，不能卡死 =="
-mkdir -p "$WORK/bin-tmo"
-cat >"$WORK/bin-tmo/whiptail" <<'MOCK'
-#!/usr/bin/env bash
-# 模拟"等不到按键被 timeout 杀掉"（真实情况是 timeout 命令返回 124）
-exit 124
-MOCK
-chmod +x "$WORK/bin-tmo/whiptail"
-CUR_OUT="$WORK/tui-tmo.out"
-printf 'n\nn\nn\nn\ny\nn\ny\nn\nn\nn\n' |
-  PATH="$WORK/bin-tmo:$PATH" VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
-    bash "$WORK/init-fake.sh" --force --dry-run --ui=whiptail >"$CUR_OUT" 2>&1
-rc=$?
-check "超时后仍然跑完" "0" "$rc"
-check_has "提示是等待超时" "$CUR_OUT" "等待操作超时"
-check_has "已降级为文字问答" "$CUR_OUT" "已改用文字问答"
-check_has "降级后继续执行所选步骤" "$CUR_OUT" "步骤 1/1：时区 / Swap / BBR 网络加速"
-
-echo "== 15) 编号菜单 --ui=menu：输入数字即可选择（不依赖方向键） =="
-CUR_OUT="$WORK/menu.out"
-rc="$(printf '4 5\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
-check "菜单模式退出码" "0" "$rc"
-check_has "列出了编号菜单" "$CUR_OUT" "请选择要执行的步骤"
-check_has "说明要哪些填哪些" "$CUR_OUT" "要哪些就填哪些的编号"
-check_has "按编号选中了 fail2ban" "$CUR_OUT" "步骤 1/2：安装配置 fail2ban"
-check_has "按编号选中了 tuning" "$CUR_OUT" "步骤 2/2：时区 / Swap / BBR 网络加速"
-
-# 方向键（ESC 序列）不应该被当成编号，但也不能卡住
-CUR_OUT="$WORK/menu-esc.out"
-rc="$(printf '\033[A\033[B\n1\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
-check "带方向键输入后仍能继续" "0" "$rc"
-check_has "提示没认出数字" "$CUR_OUT" "没认出数字来"
-check_has "随后输入 1 正常执行" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
-
-# 全角数字也要能识别
-CUR_OUT="$WORK/menu-fw.out"
-rc="$(printf '１\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
-check "全角数字输入退出码" "0" "$rc"
-check_has "全角数字 １ 也能识别" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
-
-# 编号写错：提示后可重输；输入 0 退出
-CUR_OUT="$WORK/menu-bad.out"
-rc="$(printf '99\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --ui=menu)"
-check "输错编号后退出码" "0" "$rc"
-check_has "提示编号不对" "$CUR_OUT" "编号不对"
-check_has "输入 0 可退出" "$CUR_OUT" "已退出（未做任何修改）。"
-
-echo "== 16) 默认流程（一键命令不带参数）：直接列 1、2、3… 问你 =="
-CUR_OUT="$WORK/default.out"
-rc="$(printf '1\ny\nn\nn\nn\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
-check "默认流程退出码" "0" "$rc"
-check_has "用的是编号列表格式" "$CUR_OUT" "1、只更新内核 / 驱动 / 固件"
-check_has "列表里有第 6 项" "$CUR_OUT" "6、安装常用命令行工具"
-check_has "只执行选中的第 1 项" "$CUR_OUT" "步骤 1/1：只更新内核 / 驱动 / 固件"
-
-# 不输入编号直接回车 = 什么都不做
-CUR_OUT="$WORK/default-empty.out"
-rc="$(printf '\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
-check "空回车退出码" "0" "$rc"
-check_has "空回车提示什么都没做" "$CUR_OUT" "没有输入任何编号，已退出"
-
-# --yes 无人值守：按默认项执行，不做交互
-CUR_OUT="$WORK/yes.out"
-rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes)"
-check "--yes 退出码" "0" "$rc"
-check_has "--yes 直接取默认项" "$CUR_OUT" "无人值守模式：按默认项执行"
-check_has "--yes 计划里是 3 项" "$CUR_OUT" "步骤 1/3"
-
-# 记住界面选择：上次选了 plain 就沿用
-printf 'plain\n' >"$WORK/uipref"
-CUR_OUT="$WORK/menu-pref.out"
-rc="$(printf 'n\nn\nn\nn\nn\nn\n' | VPS_INIT_UI_PREF="$WORK/uipref" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
-check "沿用记住的界面" "0" "$rc"
-check_has "提示沿用上次选择" "$CUR_OUT" "沿用上次的界面选择"
-check_has "确实用了文字问答" "$CUR_OUT" "已跳过：只更新内核 / 驱动 / 固件"
-
-echo "== 17) 默认模式绝对不能调用 whiptail（只要没显式 --ui=whiptail） =="
-CUR_OUT="$WORK/auto-noargs.out"
-printf 'check:sysupdate\n' >"$WORK/ans-auto"
-rm -f "$WORK/auto-nocall.log" "$WORK/ans-auto.idx"
-printf '1\ny\nn\nn\nn\n' | MOCK_ANSWERS="$WORK/ans-auto" MOCK_LOG="$WORK/auto-nocall.log" \
-  PATH="$WORK/bin:$PATH" VPS_INIT_FORCE_STDIN=1 VPS_INIT_ALLOW_NONROOT=1 \
-  bash "$WORK/init-fake.sh" --force --dry-run >"$CUR_OUT" 2>&1
-rc=$?
-check "默认模式退出码" "0" "$rc"
-check_has "默认用的是编号清单" "$CUR_OUT" "1、只更新内核 / 驱动 / 固件"
-if [ -s "$WORK/auto-nocall.log" ]; then
-  bad "默认模式不应该调用 whiptail（日志：$(tr '\n' ' ' <"$WORK/auto-nocall.log")）"
-else
-  ok "默认模式全程没有调用 whiptail"
-fi
-
-echo "== 18) 选 Y 立即重启：不再等 10 秒，并提示重连方式 =="
+echo "== 16) 选 Y 立即重启：不再等 10 秒 =="
 printf 'linux-base\n' >"$WORK/reboot-required"
 printf 'libc6\n' >"$WORK/reboot-required.pkgs"
 export VPS_INIT_REBOOT_REQUIRED="$WORK/reboot-required"
 CUR_OUT="$WORK/reboot.out"
-# 全部回答 y：不管中间问了几项（不同系统装的包不同），重启那一步都一定拿到 y
-rc="$(printf '1\ny\ny\ny\ny\ny\ny\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '0\ny\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "重启流程退出码" "0" "$rc"
 check_has "提示需要重启" "$CUR_OUT" "系统需要重启"
-check_has "列出了触发重启的包" "$CUR_OUT" "触发重启的包：libc6"
 check_has "dry-run 下不真重启" "$CUR_OUT" "[dry-run] 将执行 reboot"
-if grep -qF '10 秒' "$CUR_OUT"; then
-  bad "不应该再等待 10 秒"
-else
-  ok "没有 10 秒等待（选 Y 直接重启）"
-fi
+check_hasnt "不再等待 10 秒" "$CUR_OUT" "10 秒"
 unset VPS_INIT_REBOOT_REQUIRED
 
 echo

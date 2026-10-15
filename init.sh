@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  VPS新机一键脚本-acxc16 —— Ubuntu / Debian VPS 初始化交互式脚本
+#  ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
 #  版本: 1.0.0
 #  仓库: https://github.com/ACXC-16/VPS-init
 #  许可: MIT
@@ -28,7 +28,7 @@
 set -u
 set -o pipefail
 
-SCRIPT_NAME="VPS新机一键脚本-acxc16"
+SCRIPT_NAME="ACXC16-VPS新机一键脚本"
 VERSION="1.0.0"
 REPO_SLUG="ACXC-16/VPS-init"
 
@@ -58,27 +58,7 @@ OPT_PASSWORD=""
 GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
 
-# 界面：auto = 先试图形界面，不行就用编号菜单；whiptail / menu / plain 可强制
-UI_MODE="${VPS_INIT_UI:-auto}"
-UI_BACKEND="plain"
-UI_LOCALE="C.UTF-8"
-# 图形界面等待超时（秒）：等不到操作就自动切回文字菜单，绝不把脚本卡死
-UI_TIMEOUT="${VPS_INIT_UI_TIMEOUT:-300}"
-UI_SELFTEST_TIMEOUT="${VPS_INIT_UI_SELFTEST_TIMEOUT:-10}"
-# 记住上次用的界面（写了这个文件后，下次直接用同一种，不再弹方框）
-UI_PREF_FILE="${VPS_INIT_UI_PREF:-}"
-if [ -z "$UI_PREF_FILE" ]; then
-  if [ "$(id -u 2>/dev/null)" = "0" ]; then
-    UI_PREF_FILE="/root/.vps-init-ui"
-  else
-    UI_PREF_FILE="${HOME:-/tmp}/.vps-init-ui"
-  fi
-fi
-UI_EXPLICIT=0
-UI_LINES=24
-UI_COLS=80
-UI_W=76
-UI_H=14
+# 交互界面：状态表 + 编号菜单（纯文字，任何终端都能用；不支持图形方框是有意为之）
 
 # 受管的 SSH 设置（脚本重启后会从受管配置里读回来，避免覆盖上次的设置）
 SSH_M_PORTS=""
@@ -95,7 +75,7 @@ STEPS=(
   "sysupdate|只更新内核 / 驱动 / 固件|y|step_sysupdate"
   "ssh-port|修改 SSH 端口（默认 ${DEFAULT_SSH_PORT}）|y|step_ssh_port"
   "root-passwd|修改 root 密码|y|step_root_password"
-  "fail2ban|安装配置 fail2ban（防 SSH 暴力破解）|n|step_fail2ban"
+  "fail2ban|安装配置 fail2ban|n|step_fail2ban"
   "tuning|时区 / Swap / BBR 网络加速|n|step_tuning"
   "tools|安装常用命令行工具|n|step_tools"
 )
@@ -128,6 +108,17 @@ die()   { err "$*"; exit 1; }
 title() { printf '\n%s\n' "${C_BLD}${C_CYN}==== $* ====${C_RST}"; _log_raw TITLE "==== $* ===="; }
 kv()    { printf '  %-18s %s\n' "$1" "$2"; }
 have()  { command -v "$1" >/dev/null 2>&1; }
+
+# 计算字符串在终端里占几列（中文等全角字符按 2 列算；用字节数换算，与 locale 无关）
+disp_width() {
+  local s="$1" total=0 ascii=0 nonascii=0
+  total="$(printf '%s' "$s" | LC_ALL=C wc -c | tr -d ' ')"
+  ascii="$(printf '%s' "$s" | LC_ALL=C tr -dc '\000-\177' | LC_ALL=C wc -c | tr -d ' ')"
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  case "$ascii" in ''|*[!0-9]*) ascii=0 ;; esac
+  nonascii=$((total - ascii))
+  printf '%s' $((ascii + (nonascii / 3) * 2))
+}
 
 # 去掉字符串首尾空白
 trim() {
@@ -179,218 +170,26 @@ detect_tty() {
   return 0
 }
 
-# ============================== 图形界面（whiptail） =========================
-# 说明：whiptail 把"界面"画在 stdout、把"用户的选择"写到 stderr，
-# 所以要用 3>&1 1>&2 2>&3 交换一下才能用 $(...) 取回结果；
-# 又因为 curl | bash 时 stdin 是脚本本身，必须把键盘输入接到 /dev/tty。
-ui_init_size() {
-  local sz=""
-  if [ "$TTY_OK" -eq 1 ]; then
-    sz="$(stty size < /dev/tty 2>/dev/null)" || sz=""
-  fi
-  if [ -n "$sz" ]; then
-    UI_LINES="${sz%% *}"
-    UI_COLS="${sz##* }"
-  fi
-  case "$UI_LINES" in ''|*[!0-9]*) UI_LINES=24 ;; esac
-  case "$UI_COLS" in ''|*[!0-9]*) UI_COLS=80 ;; esac
-  # 留足边距，保证方框（尤其底部的按钮）一定在屏幕里
-  UI_W=$((UI_COLS - 12))
-  [ "$UI_W" -gt 72 ] && UI_W=72
-  [ "$UI_W" -lt 40 ] && UI_W=40
-  UI_H=$((UI_LINES - 6))
-  [ "$UI_H" -gt 14 ] && UI_H=14
-  [ "$UI_H" -lt 8 ] && UI_H=8
-  return 0
+# ============================== 输入清洗 ====================================
+# 清洗用户在菜单里输入的内容：去掉方向键等转义序列/控制字符，全角数字转半角，
+# 各种分隔符转空格。这样即使误按方向键也不会把 ^[[A 当成有效输入。
+menu_clean_input() { # $1=原始输入 → 清洗后的字符串
+  local s="${1-}" i
+  s="$(printf '%s' "$s" | sed -e 's/\x1b\[[0-9;?]*[A-Za-z~]//g' -e 's/\^\[\[[0-9;?]*[A-Za-z~]//g')"
+  s="$(printf '%s' "$s" | tr -d '\000-\037\177')"
+  local -a fw=(０ １ ２ ３ ４ ５ ６ ７ ８ ９)
+  for i in 0 1 2 3 4 5 6 7 8 9; do
+    s="${s//${fw[$i]}/$i}"
+  done
+  s="${s//，/ }"; s="${s//、/ }"; s="${s//；/ }"; s="${s//;// }"
+  s="${s//,/ }"; s="${s//）/ }"; s="${s//（/ }"; s="${s//#/ }"; s="${s//./ }"
+  printf '%s' "$s"
 }
 
-# 只有 GNU coreutils 的 timeout 才能这么用（Git Bash / Windows 自带的同名命令不行）
-have_gnu_timeout() {
-  have timeout || return 1
-  timeout --version 2>/dev/null | grep -qi coreutils
-}
-
-# 图形界面出错/超时/被 Ctrl+C → 降级：有终端就用编号菜单，否则用文字问答
-ui_fallback() { # $1=原因（可选）
-  local why="${1:-出错}"
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    if [ "$TTY_OK" -eq 1 ]; then
-      warn "图形界面不可用（$why），已改用编号菜单（输入数字选择，不依赖方向键）"
-      UI_BACKEND="menu"
-    else
-      warn "图形界面不可用（$why），已改用文字问答"
-      UI_BACKEND="plain"
-    fi
-    _log_raw UI "图形界面降级：$why → $UI_BACKEND"
-  fi
-  return 0
-}
-
-# 调用 whiptail：结果放 REPLY，退出码原样返回（124=等待超时，130=用户按了 Ctrl+C）
-# 对话期间临时忽略 Ctrl+C：这样 Ctrl+C 只会结束方框，脚本会降级成文字菜单继续跑，而不是整体退出。
-_ui_run() {
-  local rc=0 out="" tmo="$UI_TIMEOUT" saved_trap=""
-  saved_trap="$(trap -p INT)"
-  trap ':' INT
-  if [ "$TTY_OK" -eq 1 ]; then
-    if have_gnu_timeout; then
-      out="$(env LC_ALL="$UI_LOCALE" timeout "$tmo" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
-    else
-      out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 3>&1 1>&2 2>&3 </dev/tty)" || rc=$?
-    fi
-  else
-    # 没有终端时不做 fd 交换（测试用 mock whiptail 走这条分支）
-    out="$(env LC_ALL="$UI_LOCALE" whiptail "$@" 2>&1 1>/dev/null)" || rc=$?
-  fi
-  trap - INT
-  if [ -n "$saved_trap" ]; then eval "$saved_trap"; fi
-  REPLY="$out"
-  return "$rc"
-}
-
-# 把 whiptail 的退出码翻译成人类能看懂的处理方式
-ui_rc_reason() {
-  case "${1:-0}" in
-    124) printf '等待操作超时' ;;
-    130) printf '你按了 Ctrl+C' ;;
-    255) printf '你按了 ESC / 取消' ;;
-    *) printf '退出码 %s' "${1:-?}" ;;
-  esac
-}
-
-# 提示框：图形模式弹窗，文字模式直接打印
-ui_msg() { # $1=标题 $2=内容
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    _ui_run --title "$1" --msgbox "$2" "$UI_H" "$UI_W" || true
-  else
-    info "$2"
-  fi
-  return 0
-}
-
-ui_selftest() { # 返回 0 = 图形界面可用；自检框有超时，按不动键也不会卡住
-  local rc=0 saved="$UI_TIMEOUT"
-  UI_TIMEOUT="$UI_SELFTEST_TIMEOUT"
-  _ui_run --title "VPS新机一键脚本-acxc16 界面自检" \
-    --yesno "接下来会用这样的方框来操作。\n\n操作方式：用 Tab 或 ← → 切换按钮，回车确认。\n（直接敲 y / n 没用；如果方向键在方框里变成 ^[[C 这种乱码，\n说明你的终端不支持，请直接选 <No> 或什么都不按）\n\n  <Yes>  用图形界面\n  <No>   改用编号菜单（推荐，直接输入数字）\n\n什么都不按的话，${UI_SELFTEST_TIMEOUT} 秒后会自动改用编号菜单。" \
-    18 74 || rc=$?
-  UI_TIMEOUT="$saved"
-  case "$rc" in
-    0) return 0 ;;
-    1) return 1 ;;
-    *) ui_fallback "$(ui_rc_reason "$rc")"; return 1 ;;
-  esac
-}
-
-# 把最终选择记下来（只记非默认的 whiptail/plain；menu 本来就是默认值，不用记）
-ui_save_pref() { # $1=whiptail|menu|plain
-  [ -n "$UI_PREF_FILE" ] || return 0
-  [ "$UI_EXPLICIT" -eq 0 ] || return 0
-  case "${1:-}" in
-    whiptail|plain) ;;
-    *) return 0 ;;
-  esac
-  if [ "$TTY_OK" -ne 1 ] && [ -z "${VPS_INIT_UI_PREF:-}" ]; then return 0; fi
-  if printf '%s\n' "$1" >"$UI_PREF_FILE" 2>/dev/null; then
-    _log_raw UI "记住界面选择：$1（$UI_PREF_FILE）"
-  fi
-  return 0
-}
-
-# 决定用哪种界面：auto = 能用图形界面就用，否则用编号菜单，兜底文字问答
-ui_detect() {
-  ui_detect_impl
-  ui_save_pref "$UI_BACKEND"
-  return 0
-}
-
-ui_detect_impl() {
-  # 默认就是编号菜单：任何终端（含 FinalShell）都能用，不依赖方向键/方框
-  UI_BACKEND="menu"
-  [ "$UI_MODE" = "auto" ] || UI_EXPLICIT=1
-
-  # 只有"上次明确选过 whiptail/plain"才覆盖默认值
-  if [ "$UI_EXPLICIT" -eq 0 ] && [ -r "$UI_PREF_FILE" ]; then
-    local saved=""
-    saved="$(trim "$(head -n 1 "$UI_PREF_FILE" 2>/dev/null)")"
-    case "$saved" in
-      whiptail|plain)
-        UI_MODE="$saved"
-        info "沿用上次的界面选择：${saved}（想换：--ui=whiptail / --menu / --text）"
-        ;;
-    esac
-  fi
-
-  # auto / menu：一律用编号清单，绝不碰 whiptail
-  # （只有 --ui=whiptail 显式指定，或上次明确记下 whiptail，才走下面的方框分支）
-  case "$UI_MODE" in
-    auto|menu) UI_BACKEND="menu";  return 0 ;;
-    plain)     UI_BACKEND="plain"; return 0 ;;
-  esac
-
-  # 下面只处理 whiptail（必须是 --ui=whiptail 显式指定，或上次记下的选择）
-  if ! have whiptail; then
-    if [ "$TTY_OK" -eq 1 ] && have apt-get; then
-      if ask_yn "图形方框需要 whiptail 组件（很小，几十 KB），是否现在安装？" y; then
-        run env DEBIAN_FRONTEND=noninteractive apt-get -y install whiptail >/dev/null 2>&1 ||
-          warn "whiptail 安装失败"
-      fi
-    fi
-    if ! have whiptail; then
-      warn "没有 whiptail，无法使用图形方框，改用编号菜单"
-      return 0
-    fi
-  fi
-
-  if [ "$TTY_OK" -ne 1 ]; then
-    warn "当前没有可用终端，仍按 --ui=whiptail 尝试（显示可能异常）"
-    UI_BACKEND="whiptail"
-    return 0
-  fi
-
-  # 方框里是中文，需要 UTF-8 locale，否则会乱码
-  UI_LOCALE="C"
-  if have locale && locale -a 2>/dev/null | grep -qiE '^C\.utf-?8$'; then
-    UI_LOCALE="C.UTF-8"
-  else
-    warn "系统没有 UTF-8 locale，图形界面里的中文可能乱码（可用 --ui=whiptail 强制）"
-    return 0
-  fi
-
-  # TERM 不合法时 whiptail 的按键解析会出问题，尝试兜底成 xterm
-  case "${TERM:-}" in
-    ''|dumb|unknown)
-      warn "TERM 未设置或不可用（TERM=${TERM:-空}），图形界面按键可能失效"
-      if have infocmp && infocmp xterm >/dev/null 2>&1; then
-        export TERM=xterm
-        info "已临时把 TERM 设为 xterm"
-      else
-        return 0
-      fi ;;
-  esac
-
-  ui_init_size
-  # 终端太小就别用图形界面了（whiptail 会显示不全甚至直接失败）
-  if [ "$UI_COLS" -lt 60 ] || [ "$UI_LINES" -lt 14 ]; then
-    if [ "$UI_MODE" = "whiptail" ]; then
-      warn "终端尺寸只有 ${UI_COLS}x${UI_LINES}，图形界面可能显示不全（继续尝试）"
-    else
-      info "终端尺寸 ${UI_COLS}x${UI_LINES} 偏小，改用编号菜单"
-      return 0
-    fi
-  fi
-
-  # 先把操作方式讲清楚，免得卡在方框里不知道怎么按键
-  info "接下来会先弹一个图形界面的自检框。操作方式：Tab 或 ← → 切换按钮，回车确认（直接敲 y/n 无效）。"
-  warn "如果按键没反应（方向键变成 ^[[C 之类的乱码）：什么都别按，${UI_SELFTEST_TIMEOUT} 秒后会自动改用编号菜单；按 Ctrl+C 也可以，脚本不会退出。"
-
-  if ui_selftest; then
-    UI_BACKEND="whiptail"
-    _log_raw UI "使用图形界面（whiptail）"
-  else
-    if [ "$UI_BACKEND" = "menu" ]; then
-      info "将使用编号菜单：列表里直接输入数字选择（不依赖方向键）"
-    fi
+# 读取一行（菜单用）：返回 0=拿到内容，1=读不到
+read_line() { # $1=提示语 → REPLY（原样，未清洗）
+  if ! _prompt_line "  $1" ""; then
+    return 1
   fi
   return 0
 }
@@ -417,15 +216,6 @@ _prompt_line() { # $1=提示语 $2=默认值 → REPLY
 
 _prompt_secret() { # $1=提示语 → REPLY（不回显）
   local p="$1" line=""
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    local rc=0
-    _ui_run --title "$SCRIPT_NAME" --passwordbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" || rc=$?
-    case "$rc" in
-      0) return 0 ;;
-      1|255) return 1 ;;
-      *) ui_fallback "$(ui_rc_reason "$rc")" ;;
-    esac
-  fi
   if [ "$TTY_OK" -eq 1 ]; then
     IFS= read -r -s -p "$p" line < /dev/tty || return 1
     printf '\n' 2>/dev/null > /dev/tty
@@ -449,19 +239,6 @@ ask_yn() {
     printf '%s\n' "${C_DIM}  [自动回答] $q -> N${C_RST}"
     _log_raw AUTO "$q -> N"
     return 1
-  fi
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    local rc=0 extra=""
-    [ "$def" = n ] && extra="--defaultno"
-    # shellcheck disable=SC2086
-    _ui_run --title "$SCRIPT_NAME" $extra --yesno "$(printf '%b' "$q")
-
-（Tab 或 ← → 切换按钮，回车确认）" "$UI_H" "$UI_W" || rc=$?
-    case "$rc" in
-      0) _log_raw ANSWER "$q -> Y"; return 0 ;;
-      1) _log_raw ANSWER "$q -> N"; return 1 ;;
-      *) ui_fallback "$(ui_rc_reason "$rc")" ;;
-    esac
   fi
   hint="[y/N]"; [ "$def" = y ] && hint="[Y/n]"
   while :; do
@@ -488,26 +265,6 @@ ask_value() {
     REPLY="$def"
     if [ -n "$def" ]; then return 0; fi
     return 1
-  fi
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    local rc=0 tries=0
-    while [ "$tries" -lt 20 ]; do
-      tries=$((tries + 1))
-      rc=0
-      _ui_run --title "$SCRIPT_NAME" --inputbox "$(printf '%b' "$p")" "$UI_H" "$UI_W" "$def" || rc=$?
-      if [ "$rc" -eq 0 ]; then
-        if [ -n "$REPLY" ]; then return 0; fi
-        if [ -n "$def" ]; then REPLY="$def"; return 0; fi
-        warn "输入不能为空"
-        continue
-      fi
-      if [ "$rc" -eq 1 ] || [ "$rc" -eq 255 ]; then
-        warn "已取消输入"
-        return 1
-      fi
-      ui_fallback "$(ui_rc_reason "$rc")"
-      break
-    done
   fi
   while :; do
     if ! _prompt_line "  $p" "$def"; then
@@ -1023,8 +780,14 @@ step_ssh_port() {
     esac
   fi
 
-  # 改端口前的安全提示（图形界面会弹窗，文字模式直接打印）
-  ui_msg "改 SSH 端口前的检查" "① 云服务商控制台的「安全组 / 防火墙」要先放行 ${new_port}/TCP\n② 当前 SSH 会话不要断开（重启 sshd 不会踢掉已登录的连接）\n③ 改完后另开一个终端用 ssh -p ${new_port} 验证，成功再关旧连接\n④ 万一连不上，用 VNC/控制台登录后执行回滚命令（脚本最后会打印）"
+  # 改端口前的安全提示
+  printf '\n'
+  warn "改 SSH 端口前请先确认："
+  printf '  ① 云服务商控制台的「安全组 / 防火墙」先放行 %s/TCP\n' "$new_port"
+  printf '  ② 当前 SSH 会话不要断开（重启 sshd 不会踢掉已登录的连接）\n'
+  printf '  ③ 改完另开一个终端用 ssh -p %s root@<服务器IP> 验证，成功再关旧连接\n' "$new_port"
+  printf '  ④ 万一连不上：用云控制台 VNC 登录后执行脚本最后打印的回滚命令\n'
+  printf '\n'
 
   # 本机防火墙放行
   info "检查本机防火墙…"
@@ -1137,9 +900,7 @@ step_root_password() {
     # 先生成、先给你看，确认记下来之后才真正生效
     printf '\n%s\n' "${C_BLD}${C_YEL}  ★ 即将设置的 root 随机密码（只显示这一次）：${C_RST}"
     printf '%s\n\n' "${C_BLD}      ${pw}${C_RST}"
-    if [ "$UI_BACKEND" = "whiptail" ]; then
-      _ui_run --title "请先保存这个密码" --msgbox "即将设置的 root 新密码：\n\n    ${pw}\n\n脚本不会把它写进日志，也只显示这一次。\n请先复制保存，再点 <Ok>。" "$UI_H" "$UI_W" || true
-    fi
+    printf '  %s\n' "脚本不会把它写进日志，也只显示这一次；请先复制保存。"
     if ! ask_yn "已经记下这个密码了，确认现在修改 root 密码？" y; then
       info "已取消：root 密码保持不变。"
       pw=""
@@ -1516,133 +1277,229 @@ plan_add() { # $1=步骤标识 → 追加到执行计划
   return 1
 }
 
-# 图形界面：一屏勾选所有步骤
-build_plan_tui() {
-  local entry slug title def fn rc=0 item
-  local -a args=()
-  local h=$(( ${#STEPS[@]} + 9 ))
-  local listh=$(( ${#STEPS[@]} + 1 ))
-  [ "$h" -gt $((UI_LINES - 2)) ] && h=$((UI_LINES - 2))
-  [ "$h" -lt 10 ] && h=10
-  [ "$listh" -gt $((h - 5)) ] && listh=$((h - 5))
-  [ "$listh" -lt 1 ] && listh=1
-
-  for entry in "${STEPS[@]}"; do
-    IFS='|' read -r slug title def fn <<<"$entry"
-    if [ "$def" = y ]; then
-      args+=("$slug" "$title" "ON")
+# ============================== 状态表 ======================================
+# 每个步骤在本机当前的真实状态，风格参考常见管理面板（项目 / 状态）
+status_kernel() {
+  local k="" n=""
+  k="$(uname -r)"
+  if have apt; then
+    n="$(upgradable_kernel_pkgs 2>/dev/null | grep -c . || true)"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    if [ "$n" -gt 0 ]; then
+      printf '内核 %s（有 %s 个驱动/内核包可升级）' "$k" "$n"
     else
-      args+=("$slug" "$title" "OFF")
+      printf '内核 %s（已是最新）' "$k"
     fi
-  done
-
-  _ui_run --title "$SCRIPT_NAME · 选择要执行的步骤" --separate-output \
-    --checklist "空格 = 勾选/取消    方向键 = 移动    Tab = 切到 <Ok>    回车 = 确认\n\n标 ON 的是推荐默认项，不想做的取消勾选即可。" \
-    "$h" "$UI_W" "$listh" "${args[@]}" || rc=$?
-  if [ "$rc" -eq 1 ] || [ "$rc" -eq 255 ]; then
-    warn "已取消选择，未做任何修改。"
-    exit 0
+  else
+    printf '内核 %s' "$k"
   fi
-  if [ "$rc" -ne 0 ]; then
-    # 界面本身出问题（含等待超时）：降级成文字问答，不静默退出
-    ui_fallback "$(ui_rc_reason "$rc")"
-    return 1
-  fi
-  if [ -z "$REPLY" ]; then
-    warn "没有勾选任何步骤，退出。"
-    exit 0
-  fi
-  while IFS= read -r item; do
-    [ -n "$item" ] || continue
-    plan_add "$item" || warn "未知步骤：$item"
-  done <<<"$REPLY"
-  return 0
 }
 
-# 清洗菜单输入：去掉方向键等转义序列/控制字符，全角数字转半角，各种分隔符转空格
-menu_clean_input() { # $1=原始输入 → 清洗后的字符串
-  local s="${1-}" i
-  # 方向键 / Home / PageUp 等在普通输入下会以 ESC 序列的形式进来
-  s="$(printf '%s' "$s" | sed -e 's/\x1b\[[0-9;?]*[A-Za-z~]//g' -e 's/\^\[\[[0-9;?]*[A-Za-z~]//g')"
-  s="$(printf '%s' "$s" | tr -d '\000-\037\177')"
-  local -a fw=(０ １ ２ ３ ４ ５ ６ ７ ８ ９)
-  for i in 0 1 2 3 4 5 6 7 8 9; do
-    s="${s//${fw[$i]}/$i}"
-  done
-  s="${s//，/ }"; s="${s//、/ }"; s="${s//；/ }"; s="${s//;// }"
-  s="${s//,/ }"; s="${s//）/ }"; s="${s//（/ }"; s="${s//#/ }"; s="${s//./ }"
-  printf '%s' "$s"
+status_ssh() {
+  local p=""
+  p="$(trim "$(current_ssh_ports)")"
+  [ -n "$p" ] || p="$(trim "$SSH_M_PORTS")"
+  if [ -n "$p" ]; then
+    printf '当前端口 %s' "$p"
+  else
+    printf '未检测到 sshd 配置'
+  fi
 }
 
-# 编号菜单：一行一项列出来（1、2、3、…），问你要哪些、不要哪些
-# 不依赖方向键 / Tab / terminfo，任何终端（含 FinalShell）都能用
-build_plan_menu() {
-  local entry slug title def fn i=0 raw="" line="" tok="" ok=1
-  local -a t_slug=() t_title=() t_def=()
+status_passwd() {
+  local line="" st="" d=""
+  line="$(passwd -S root 2>/dev/null)" || line=""
+  st="$(printf '%s' "$line" | awk '{print $2}')"
+  d="$(printf '%s' "$line" | awk '{print $3}')"
+  case "$st" in
+    P) if [ -n "$d" ]; then printf '已设置密码（%s）' "$d"; else printf '已设置密码'; fi ;;
+    L) printf '已锁定' ;;
+    NP) printf '未设置密码' ;;
+    '') printf '未知' ;;
+    *) printf '状态 %s' "$st" ;;
+  esac
+}
 
-  printf '\n%s\n' "${C_BLD}${C_CYN}================ 请选择要执行的步骤 ================${C_RST}"
+status_fail2ban() {
+  if ! have fail2ban-client; then
+    printf '未安装'
+    return 0
+  fi
+  if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
+    printf '已安装，运行中'
+  else
+    printf '已安装，未运行'
+  fi
+}
+
+status_tuning() {
+  local tz="" sw="" cc=""
+  tz="$(date +%Z 2>/dev/null)"
+  sw="$(awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+  cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+  if [ -n "${sw:-}" ] && [ "$sw" -gt 0 ]; then
+    printf '时区 %s · Swap %sMB · TCP %s' "${tz:-?}" "$sw" "${cc:-?}"
+  else
+    printf '时区 %s · 无 Swap · TCP %s' "${tz:-?}" "${cc:-?}"
+  fi
+}
+
+status_tools() {
+  local pkg="" have_n=0 total=0
+  for pkg in curl wget vim htop tmux git rsync jq unzip lsof; do
+    total=$((total + 1))
+    if have "$pkg"; then have_n=$((have_n + 1)); fi
+  done
+  printf '常用工具 %s/%s 已安装' "$have_n" "$total"
+}
+
+status_of() { # $1=步骤标识 → 输出状态文字
+  case "$1" in
+    sysupdate)   status_kernel ;;
+    ssh-port)    status_ssh ;;
+    root-passwd) status_passwd ;;
+    fail2ban)    status_fail2ban ;;
+    tuning)      status_tuning ;;
+    tools)       status_tools ;;
+    *)           printf '—' ;;
+  esac
+}
+
+show_status_table() {
+  local entry slug title def fn line=""
+  printf '\n%s\n' "${C_BLD}${C_CYN}  ${SCRIPT_NAME}  v${VERSION}${C_RST}"
+  printf '  %s\n' "${C_DIM}适用：Ubuntu / Debian    仓库：https://github.com/${REPO_SLUG}${C_RST}"
+  printf '\n'
+  printf '  %-34s %s\n' "项目" "状态"
+  printf '  %s\n' "────────────────────────────────── ──────────────────────────────"
+  local pad=0
   for entry in "${STEPS[@]}"; do
     IFS='|' read -r slug title def fn <<<"$entry"
-    i=$((i + 1))
-    t_slug+=("$slug"); t_title+=("$title"); t_def+=("$def")
-    printf '%s、%s\n' "$i" "$title"
+    line="$(status_of "$slug")"
+    pad=$((30 - $(disp_width "$title")))
+    [ "$pad" -lt 1 ] && pad=1
+    printf '  %s%*s  %s\n' "$title" "$pad" "" "$line"
   done
-  printf '%s\n' "${C_BLD}===================================================${C_RST}"
-  printf '  %s\n' "要哪些就填哪些的编号（多个用空格隔开，例如：1 3）"
-  printf '  %s\n' "只更新驱动 = 输入 1        全部执行 = 输入 a"
-  printf '  %s\n' "不输入任何编号直接回车 = 什么都不做，退出"
   printf '\n'
+}
 
+show_log_tail() { # 看最近的日志
+  local n="${1:-40}"
+  if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+    printf '\n%s\n' "${C_BLD}最近 ${n} 行日志（$LOG_FILE）：${C_RST}"
+    tail -n "$n" "$LOG_FILE" 2>/dev/null || cat "$LOG_FILE" 2>/dev/null || true
+  else
+    warn "日志文件不存在：${LOG_FILE:-未启用}"
+  fi
+  printf '\n'
+}
+
+# ============================== 操作菜单 ====================================
+show_menu() {
+  printf '%s\n' "${C_BLD}${C_CYN}操作菜单${C_RST}"
+  printf '  %s\n' "1) 只更新内核 / 驱动 / 固件"
+  printf '  %s\n' "2) 修改 SSH 端口"
+  printf '  %s\n' "3) 修改 root 密码"
+  printf '  %s\n' "4) 安装配置 fail2ban"
+  printf '  %s\n' "5) 时区 / Swap / BBR 网络加速"
+  printf '  %s\n' "6) 安装常用命令行工具"
+  printf '  %s\n' "7) 查看系统信息"
+  printf '  %s\n' "8) 查看运行日志"
+  printf '  %s\n' "9) 全部按默认执行（1 2 3）"
+  printf '  %s\n' "0) 退出"
+  printf '\n'
+}
+
+menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
+  local raw="" cleaned=""
   while :; do
-    if ! _prompt_line "  请输入编号" ""; then
+    if ! read_line "请选择"; then
       warn "读取输入失败"
       return 1
     fi
     raw="$REPLY"
-    line="$(trim "$(menu_clean_input "$raw")")"
-
-    # 直接回车 = 什么都不做（避免误改端口/密码）
-    if [ -z "$(trim "$raw")" ]; then
-      info "没有输入任何编号，已退出（未做任何修改）。"
-      exit 0
-    fi
-    # 敲了东西但清洗后啥也不剩（多半是按了方向键）
-    if [ -z "$line" ]; then
-      warn "没认出数字来（可能是按了方向键）：请直接用键盘输入编号，例如 1 或 1 3"
+    cleaned="$(trim "$(menu_clean_input "$raw")")"
+    if [ -z "$cleaned" ]; then
+      if [ -n "$(trim "$raw")" ]; then
+        warn "没认出输入来（可能是按了方向键）：请直接输入数字，例如 1"
+        continue
+      fi
       continue
     fi
-    case "$line" in
-      0|q|Q)
-        info "已退出（未做任何修改）。"
-        exit 0 ;;
-      a|A|all|ALL)
-        for i in "${!t_slug[@]}"; do plan_add "${t_slug[$i]}"; done
-        return 0 ;;
-    esac
-
-    # 解析编号
-    PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
-    ok=1
-    # shellcheck disable=SC2046,SC2086
-    for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
-      case "$tok" in
-        ''|*[!0-9]*) ok=0; break ;;
-      esac
-      if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#t_slug[@]}" ]; then ok=0; break; fi
-      plan_add "${t_slug[$((tok - 1))]}"
-    done
-    if [ "$ok" -eq 1 ] && [ "${#PLAN_SLUGS[@]}" -gt 0 ]; then
-      return 0
-    fi
-    PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
-    warn "编号不对，请输入 1-${#t_slug[@]} 之间的数字，例如：1 3"
+    REPLY="$cleaned"
+    return 0
   done
 }
 
-build_plan() {
-  local entry slug title def fn i=0 total=${#STEPS[@]}
+# 菜单循环：选一项 → 执行 → 回到菜单，直到选 0 退出
+menu_loop() {
+  local choice="" n=0 entry_slug=""
+  while :; do
+    show_status_table
+    show_menu
+    if ! menu_read_choice; then
+      break
+    fi
+    choice="$REPLY"
 
-  # 指定了 --only / --skip 就按清单执行，不再逐项询问
+    case "$choice" in
+      0|q|Q|exit|quit)
+        break ;;
+      1|2|3|4|5|6)
+        n="$choice"
+        PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
+        if plan_add "$(step_slug_by_index "$n")"; then
+          run_plan
+          printf '\n'
+          printf '  %s\n' "${C_DIM}（按回车继续）${C_RST}"
+          _prompt_line "  " "" >/dev/null 2>&1 || true
+        else
+          warn "无效的选择：$choice"
+        fi
+        ;;
+      7)
+        show_system_info
+        printf '\n  %s\n' "${C_DIM}（按回车继续）${C_RST}"
+        _prompt_line "  " "" >/dev/null 2>&1 || true
+        ;;
+      8)
+        show_log_tail 40
+        printf '\n  %s\n' "${C_DIM}（按回车继续）${C_RST}"
+        _prompt_line "  " "" >/dev/null 2>&1 || true
+        ;;
+      9|a|A|all|ALL)
+        info "按默认项执行：1、2、3"
+        PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
+        for entry_slug in sysupdate ssh-port root-passwd; do
+          plan_add "$entry_slug"
+        done
+        run_plan
+        printf '\n'
+        ;;
+      *)
+        warn "无效的选择：$choice（请输入 0-9）"
+        ;;
+    esac
+  done
+  printf '\n'
+  return 0
+}
+
+step_slug_by_index() { # $1=菜单序号(1..N) → 输出步骤标识
+  local i=0 entry slug title def fn
+  for entry in "${STEPS[@]}"; do
+    i=$((i + 1))
+    IFS='|' read -r slug title def fn <<<"$entry"
+    if [ "$i" = "$1" ]; then
+      printf '%s' "$slug"
+      return 0
+    fi
+  done
+  return 1
+}
+# 非交互路径（--only / --skip / --yes）用的执行计划
+build_plan() {
+  local entry slug title def fn
   if [ -n "$ONLY_LIST" ] || [ -n "$SKIP_LIST" ]; then
     for entry in "${STEPS[@]}"; do
       IFS='|' read -r slug title def fn <<<"$entry"
@@ -1655,50 +1512,15 @@ build_plan() {
     done
     return 0
   fi
-
-  # 无人值守（--yes）：直接按默认项执行，不做任何交互
   if [ "$ASSUME_YES" -eq 1 ]; then
-    info "无人值守模式：按默认项执行（1、2、3）"
+    info "无人值守模式：按默认项执行"
     for entry in "${STEPS[@]}"; do
       IFS='|' read -r slug title def fn <<<"$entry"
       if [ "$def" = y ]; then plan_add "$slug"; fi
     done
     return 0
   fi
-
-  # 图形方框：只有 --ui=whiptail（或上次记下的选择）才会走这里
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    if build_plan_tui; then return 0; fi
-  fi
-
-  # 编号菜单：同样是可视化列表，但只靠输入数字，不依赖按键
-  if [ "$UI_BACKEND" = "menu" ]; then
-    build_plan_menu
-    return 0
-  fi
-
-  title "可执行步骤（共 ${total} 项）"
-  for entry in "${STEPS[@]}"; do
-    i=$((i + 1))
-    IFS='|' read -r slug title def fn <<<"$entry"
-    if [ "$def" = y ]; then
-      printf '  %d) %-13s %s  %s\n' "$i" "$slug" "$title" "${C_DIM}[默认 Y]${C_RST}"
-    else
-      printf '  %d) %-13s %s  %s\n' "$i" "$slug" "$title" "${C_DIM}[默认 N]${C_RST}"
-    fi
-  done
-  printf '\n'
-  info "下面逐项询问，输入 y 执行 / n 跳过（直接回车用默认值）"
-  printf '\n'
-
-  for entry in "${STEPS[@]}"; do
-    IFS='|' read -r slug title def fn <<<"$entry"
-    if ask_yn "执行「${title}」？" "$def"; then
-      plan_add "$slug"
-    else
-      info "已跳过：${title}"
-    fi
-  done
+  return 0
 }
 
 confirm_plan() {
@@ -1742,6 +1564,10 @@ run_plan() {
 print_summary() {
   local i=0 total=${#RESULT_NAMES[@]}
   FAILED_COUNT=0
+  if [ "$total" -eq 0 ]; then
+    info "本次没有执行任何操作。"
+    return 0
+  fi
   title "执行结果汇总"
   while [ "$i" -lt "$total" ]; do
     if [ "${RESULT_STATES[$i]}" = "0" ]; then
@@ -1785,15 +1611,6 @@ print_next_steps() {
   printf '  * 日志文件：%s\n' "${LOG_FILE:-未启用}"
   printf '  * 再次运行本脚本可随时追加/调整设置（重复执行是安全的）\n'
   printf '\n'
-  # 图形模式：最后再弹一次关键信息，防止刷屏看漏导致失联
-  if [ "$UI_BACKEND" = "whiptail" ]; then
-    local tips=""
-    if [ -n "$NEW_ROOT_PASSWORD" ]; then tips="${tips}root 密码：${NEW_ROOT_PASSWORD}\n\n"; fi
-    if [ -n "$new" ]; then tips="${tips}SSH 端口：${new}\n"; fi
-    if [ -n "$tips" ]; then
-      _ui_run --title "请保存这些信息" --msgbox "本次改动的关键信息：\n\n${tips}\n请复制保存后再关闭窗口。" "$UI_H" "$UI_W" || true
-    fi
-  fi
   return 0
 }
 
@@ -1907,14 +1724,15 @@ show_system_info() {
 # ============================== 参数与主流程 ================================
 usage() {
   cat <<'EOF'
-VPS新机一键脚本-acxc16 —— Ubuntu / Debian VPS 初始化交互式脚本
+ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
 
 用法:
-  sudo bash init.sh [选项]
-  curl -fsSL https://raw.githubusercontent.com/ACXC-16/VPS-init/main/init.sh | sudo bash
+  直接跑就是交互式：显示状态表 + 编号操作菜单，选一项执行一项，选 0 退出
+    curl -fsSL https://github.com/ACXC-16/VPS-init/releases/latest/download/init.sh | bash
+    bash init.sh
 
 选项:
-  -y, --yes            全部询问自动用默认值回答（无人值守）
+  -y, --yes            无人值守：不显示菜单，按默认项一次性执行
                        ★ --yes 不会自动修改 root 密码：避免给你设置一个自己不知道的密码。
                          要改密码必须显式加 --password '新密码' 或 --gen-password。
       --password <密码> 明确指定新的 root 密码（会留在 shell 历史里，用完记得清）
@@ -1923,9 +1741,7 @@ VPS新机一键脚本-acxc16 —— Ubuntu / Debian VPS 初始化交互式脚本
       --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
       --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
-      --ui <模式>      界面模式：auto（默认=编号清单）/ whiptail（图形方框）/ menu / plain
-      --text           等价于 --ui=plain，强制用文字问答（老式 [Y/n]）
-      --menu           等价于 --ui=menu，用编号菜单（不依赖方向键，推荐给不支持的终端）
+      --text           兼容保留（界面本来就是纯文字菜单，可加可不加）
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）
       --no-color       关闭彩色输出
       --log-file <路径> 指定日志文件（默认 /var/log/vps-init.log）
@@ -1933,7 +1749,7 @@ VPS新机一键脚本-acxc16 —— Ubuntu / Debian VPS 初始化交互式脚本
   -h, --help           显示本帮助
   -V, --version        显示版本号
 
-步骤标识:
+步骤标识（--only / --skip 用）:
   sysupdate     只更新内核 / 驱动 / 固件（其它软件包默认不动）
   ssh-port      修改 SSH 端口（默认 52052）
   root-passwd   修改 root 密码
@@ -1964,10 +1780,10 @@ parse_args() {
       --dry-run) DRY_RUN=1 ;;
       --force) FORCE_OS=1 ;;
       --no-color) COLOR_OFF=1 ;;
-      --ui) shift; UI_MODE="${1:-auto}"; [ -n "${1:-}" ] || die "--ui 需要一个参数" ;;
-      --ui=*) UI_MODE="${1#*=}" ;;
-      --text) UI_MODE="plain" ;;
-      --menu) UI_MODE="menu" ;;
+      --ui) shift; [ -n "${1:-}" ] || die "--ui 需要一个参数"; warn "图形方框界面已移除，现在统一是状态表 + 编号菜单（--ui 仅作兼容）" ;;
+      --ui=*) warn "图形方框界面已移除，现在统一是状态表 + 编号菜单（--ui 仅作兼容）" ;;
+      --text) : ;;
+      --menu) : ;;
       --log-file) shift; LOG_FILE="${1:-$LOG_FILE}"; [ -n "${1:-}" ] || die "--log-file 需要一个参数" ;;
       --log-file=*) LOG_FILE="${1#*=}" ;;
       --list) list_steps; exit 0 ;;
@@ -2008,10 +1824,17 @@ main() {
   export DEBIAN_FRONTEND=noninteractive
   show_system_info
   ssh_load_managed
-  ui_detect
-  build_plan
-  confirm_plan
-  run_plan
+
+  # 指定了 --only / --skip / --yes 时：一次性执行，不进菜单
+  if [ -n "$ONLY_LIST" ] || [ -n "$SKIP_LIST" ] || [ "$ASSUME_YES" -eq 1 ]; then
+    build_plan
+    confirm_plan
+    run_plan
+  else
+    # 交互式：状态表 + 编号菜单，循环执行直到选 0 退出
+    menu_loop
+  fi
+
   print_summary
   print_next_steps
   maybe_reboot
