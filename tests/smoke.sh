@@ -59,7 +59,18 @@ check() { # $1=说明 $2=期望 $3=实际
 }
 
 check_has() { # $1=说明 $2=输出文件 $3=关键字
-  if grep -qF -- "$3" "$2"; then ok "$1"; else bad "$1（输出里没找到「$3」）"; fi
+  if grep -qF -- "$3" "$2"; then
+    ok "$1"
+  else
+    # 附带文件里含脚本名的实际行，便于看出空格/字符差异
+    local hint=""
+    hint="$(grep -m2 'ACXC16' "$2" 2>/dev/null | tr -d '\r' | tr '\n' '|' | cut -c1-120)"
+    if [ -n "$hint" ]; then
+      bad "$1（输出里没找到「$3」；文件里的相关行：[$hint]）"
+    else
+      bad "$1（输出里没找到「$3」）"
+    fi
+  fi
 }
 
 check_hasnt() { # $1=说明 $2=输出文件 $3=不该出现的关键字
@@ -185,8 +196,8 @@ check_has "打印了系统信息" "$CUR_OUT" "==== 系统信息 ===="
 
 echo "== 11) 菜单 9 = 全部按默认执行 =="
 CUR_OUT="$WORK/menu9.out"
-# 前面 6 个空行让各步骤的问题都走默认值，最后两行给 root 密码的两遍输入
-rc="$(printf '9\n\n\n\n\n\n\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+# 中间用一串 n 兜住各步骤的 y/n 提问（不同系统提问数量不一样），最后两行给 root 密码
+rc="$(printf '9\nnnnnnnnnnn\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --port 52052)"
 check "全部执行退出码" "0" "$rc"
 check_has "提示按默认项执行" "$CUR_OUT" "按默认项执行：1、2、3"
 check_has "计划里是 3 项" "$CUR_OUT" "步骤 1/3"
