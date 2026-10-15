@@ -1,12 +1,17 @@
 # vps-init
 
-Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你 Y/N**，改错会失联的操作（SSH 端口、root 密码）带备份、校验和自动回滚。
+Ubuntu / Debian VPS 初始化交互式脚本：**每一步都先问你**（图形化菜单），改错会失联的操作（SSH 端口、root 密码）带备份、校验和自动回滚。
 
 ```bash
+# 稳定版（推荐）：指向最新的 Release，内容锁定不变，也带 SHA256 校验文件
+curl -fsSL https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh | sudo bash
+
+# 最新开发版：跟随 main 分支，随时是最新提交
 curl -fsSL https://raw.githubusercontent.com/qinjing-arch/VPS-init/main/init.sh | sudo bash
 ```
 
-> 仓库地址已按你的账号配置好：`qinjing-arch/VPS-init`。如果以后改了 GitHub 用户名或仓库名，按文末「改名 / 换仓库地址」一节改一处即可。
+> 当前版本 **v1.0.0**，发布页：<https://github.com/qinjing-arch/VPS-init/releases>
+> 想锁定某个具体版本：把地址里的 `latest/download` 换成 `download/v1.0.0` 即可。
 
 ---
 
@@ -263,7 +268,12 @@ bash tests/smoke.sh      # 冒烟测试：49 项断言，全部在 --dry-run 下
 shellcheck init.sh tests/smoke.sh
 ```
 
-`tests/smoke.sh` 会把 `/etc/ssh` 指向临时目录后再测试，所以在你自己的机器上跑也是安全的。仓库自带 GitHub Actions（`.github/workflows/ci.yml`）：语法检查 + 冒烟测试 + ShellCheck，push 之后在仓库的 **Actions** 页能看到结果；测试失败时会把失败项以 **注解（Annotations）** 抛出来，不用翻日志就能看到是哪一项、期望值和实际值。
+`tests/smoke.sh` 会把 `/etc/ssh` 指向临时目录后再测试，所以在你自己的机器上跑也是安全的。仓库自带 GitHub Actions：
+
+- `.github/workflows/ci.yml`：每次 push / PR 跑语法检查 + ShellCheck + 冒烟测试；
+- `.github/workflows/release.yml`：打 `v*` tag 时**先跑测试（不通过就不发）**，然后自动创建 Release 并把 `init.sh` 作为附件传上去。
+
+测试失败时会把失败项以 **注解（Annotations）** 抛出来，不用翻日志就能看到是哪一项、期望值和实际值。
 
 脚本里有两个只在测试时用到的环境变量（日常使用不用管）：
 
@@ -360,6 +370,34 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 
 ---
 
+## 发布新版本（打 tag 自动生成 Release）
+
+```bash
+# 1) 改完代码推上去，等 CI 变绿
+git add -A && git commit -m "feat: 新增 xxx" && git push
+
+# 2) 打个版本号 tag 并推送 —— GitHub 会自动跑测试、创建 Release、附上 init.sh
+git tag -a v1.0.1 -m "vps-init v1.0.1"
+git push origin v1.0.1
+```
+
+发布完成后：
+
+- 发布页：<https://github.com/qinjing-arch/VPS-init/releases>
+- **稳定下载地址**（永远指向最新 Release，不会因为改代码而变）：
+  `https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh`
+- 附件里还有 `SHA256SUMS.txt`，可以核对下载到的脚本有没有被动过：
+
+```bash
+curl -fsSLO https://github.com/qinjing-arch/VPS-init/releases/latest/download/init.sh
+curl -fsSLO https://github.com/qinjing-arch/VPS-init/releases/latest/download/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
+```
+
+> 顺手把脚本头部和 `VERSION="..."` 一起更新成新版本号，Release 页面会自动生成更新说明。
+
+---
+
 ## 常见问题
 
 **Q：会不会把我 SSH 关在门外？**
@@ -391,7 +429,8 @@ git remote set-url origin https://github.com/新用户名/新仓库名.git
 vps-init/
 ├── init.sh                    # 主脚本（一键执行的就是它）
 ├── tests/smoke.sh             # 冒烟测试（49 项断言，dry-run，不改系统）
-├── .github/workflows/ci.yml   # GitHub Actions：语法 + 测试 + ShellCheck
+├── .github/workflows/ci.yml   # 每次 push：语法 + ShellCheck + 59 项冒烟测试
+├── .github/workflows/release.yml # 打 tag：测试通过后自动发 Release（附 init.sh + SHA256）
 ├── .gitattributes             # 强制 LF 换行（防止 Windows 上改坏脚本）
 ├── LICENSE                    # MIT
 └── README.md
