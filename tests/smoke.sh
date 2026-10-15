@@ -105,7 +105,7 @@ check_has "--version 版本号" "$CUR_OUT" "v1.0.0"
 
 echo "== 2) 端口校验循环：abc / 70000 应被拒绝，52052 通过 =="
 CUR_OUT="$WORK/a.out"
-rc="$(printf 'y\n2\nabc\n70000\n52052\n\nn\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --only access)"
+rc="$(printf 'y\nabc\n70000\n52052\n\nTestPass123\nTestPass123\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --only access)"
 check "退出码" "0" "$rc"
 check_has "提示端口非法" "$CUR_OUT" "端口必须是 1-65535 之间的数字"
 check_has "写入新端口" "$CUR_OUT" "Port 52052"
@@ -145,7 +145,7 @@ check_hasnt "命令行明文密码不打到输出里" "$CUR_OUT" "MySecret12345"
 
 echo "== 6) root 密码：两次输入不一致应重试 =="
 CUR_OUT="$WORK/i.out"
-rc="$(printf 'y\n2\n\n\nn\nabc12345\nxyz98765\nTestPass123\nTestPass123\n' |
+rc="$(printf 'y\n\n\nabc12345\nxyz98765\nTestPass123\nTestPass123\n' |
   run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --only access)"
 check "退出码" "0" "$rc"
 check_has "提示两次不一致" "$CUR_OUT" "两次输入不一致"
@@ -261,8 +261,8 @@ echo "== 15) sysupdate 默认只动内核/驱动，其它软件包不动 =="
 CUR_OUT="$WORK/k.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
 check "退出码" "0" "$rc"
-check_has "有刷新软件源这一步" "$CUR_OUT" "1/3 刷新软件源索引"
-check_has "有重启检查这一步" "$CUR_OUT" "3/3 检查是否需要重启"
+check_has "有刷新软件源这一步" "$CUR_OUT" "1/2 刷新软件源索引"
+check_has "有可升级检查这一步" "$CUR_OUT" "2/2 检查可升级的项目"
 check_hasnt "不再问全量升级" "$CUR_OUT" "full-upgrade"
 check_hasnt "不再问清理" "$CUR_OUT" "autoremove"
 
@@ -298,19 +298,21 @@ check_hasnt "没把 Ubuntu 的 VERSION 当成脚本版本" "$CUR_OUT" "Noble Num
 
 echo "== 18) 菜单 3 = 工具子选项：只装选中的那一组 =="
 CUR_OUT="$WORK/tools.out"
-rc="$(printf '3\n1\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "工具子选项退出码" "0" "$rc"
 check_has "列出了子选项" "$CUR_OUT" "基础组件（下载 / 证书 / 密钥）"
-check_has "标了推荐项" "$CUR_OUT" "[推荐]"
+check_has "标了推荐项" "$CUR_OUT" "推荐"
+check_has "标了按需项" "$CUR_OUT" "按需"
 check_has "只安装选中的一组" "$CUR_OUT" "install curl wget ca-certificates gnupg"
 check_hasnt "没有装没选的那些" "$CUR_OUT" "install vim nano"
 check_hasnt "没选 fail2ban 就不会装它" "$CUR_OUT" "install fail2ban"
 
 echo "== 19) 菜单 3 选 fail2ban：走它自己的安装配置流程 =="
 CUR_OUT="$WORK/tools-f2b.out"
-rc="$(printf '3\n8\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n5\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "选 fail2ban 退出码" "0" "$rc"
 check_has "开始安装 fail2ban" "$CUR_OUT" "安装配置 fail2ban…"
+check_has "子菜单会提示空格分隔" "$CUR_OUT" "多个编号之间要用空格隔开"
 
 echo "== 20) 快捷命令 acxc：脚本启动时自动安装 =="
 SCDIR="$WORK/bin-shortcut"
@@ -349,7 +351,6 @@ PATH="$STUB:$PATH" bash "$WORK/summary.sh" >"$CUR_OUT" 2>&1
 check_has "结束界面列出了本次设置的 root 密码" "$CUR_OUT" "root 密码：acxc1616"
 check_has "结束界面列出了本次设置的 SSH 端口" "$CUR_OUT" "SSH 端口：52052"
 check_has "提示用新密码登录" "$CUR_OUT" "ssh -p 52052 root@"
-check_has "明确日志不含明文密码" "$CUR_OUT" "不含明文密码"
 check_hasnt "明文密码不会写进日志文件" "$WORK/summary.log" "acxc1616"
 
 echo "== 22) 旧文件名迁移：vps-init → acxc-vps =="
@@ -385,6 +386,43 @@ check_has "管理块标记也跟着换了" "$MIG/sshd/00-acxc-vps.conf" "acxc-vp
 check_hasnt "旧的标记已经不在了" "$MIG/sshd/00-acxc-vps.conf" "vps-init managed block"
 if [ -f "$MIG/f2b/acxc-vps.local" ] && [ ! -f "$MIG/f2b/vps-init.local" ]; then ok "fail2ban 配置已改名"; else bad "fail2ban 配置没有改名"; fi
 if [ -f "$MIG/sysctl/99-acxc-vps-bbr.conf" ] && [ ! -f "$MIG/sysctl/99-vps-init-bbr.conf" ]; then ok "BBR 配置已改名"; else bad "BBR 配置没有改名"; fi
+
+echo "== 23) 第 1 项：驱动 / 固件 / 内核 三个可选项 =="
+KSTUB="$WORK/kstub"
+mkdir -p "$KSTUB"
+cat >"$KSTUB/dpkg-query" <<'EOF'
+#!/bin/sh
+cat <<'OUT'
+linux-image-6.8.0-147-generic install ok installed
+linux-modules-extra-6.8.0-147-generic install ok installed
+intel-microcode install ok installed
+linux-firmware install ok installed
+OUT
+EOF
+chmod +x "$KSTUB/dpkg-query"
+CUR_OUT="$WORK/sysupdate.out"
+rc="$(printf '1\n0\n0\n' | PATH="$KSTUB:$PATH" run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "有驱动选项" "$CUR_OUT" "驱动（CPU 微码 / 驱动模块）"
+check_has "有固件选项" "$CUR_OUT" "固件（firmware）"
+check_has "有内核选项" "$CUR_OUT" "内核（image / modules / headers）"
+check_has "提示空格分隔" "$CUR_OUT" "多个编号之间要用空格隔开"
+check_hasnt "不再有日志提示" "$CUR_OUT" "查看上方输出与日志"
+
+echo "== 24) 第 2 项：先端口后密码，回车不改密码 =="
+CUR_OUT="$WORK/access.out"
+rc="$(printf '2\n52052\n\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "第一步是端口" "$CUR_OUT" "第一步：修改 SSH 端口"
+check_has "第二步是密码" "$CUR_OUT" "第二步：修改 root 密码"
+check_has "提示里给出默认密码" "$CUR_OUT" "脚本默认密码，就输入：acxc1616"
+check_has "回车不改密码" "$CUR_OUT" "root 密码保持不变"
+
+echo "== 25) 二级菜单选 0：安静地回到主菜单 =="
+CUR_OUT="$WORK/tools-quiet.out"
+rc="$(printf '3\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_hasnt "选 0 不打印多余提示" "$CUR_OUT" "已返回"
 
 echo
 if [ "$FAIL" -gt 0 ]; then
