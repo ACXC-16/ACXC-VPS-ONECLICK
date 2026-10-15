@@ -490,6 +490,14 @@ check "退出码" "0" "$rc"
 check_has "改了端口就给提示" "$CUR_OUT" "接下来请注意"
 check_has "提示里带新端口" "$CUR_OUT" "SSH 端口：52052"
 
+echo "== 30b) 端口没变 + 密码不改 → 不算改动，不提示、不多按回车 =="
+CUR_OUT="$WORK/nochange2.out"
+rc="$(printf '2\n\n22\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "如实说明没有修改" "$CUR_OUT" "本次没有做任何修改"
+check_hasnt "没有「接下来请注意」" "$CUR_OUT" "接下来请注意"
+check_hasnt "没有多要一次回车" "$CUR_OUT" "（按回车继续）"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
