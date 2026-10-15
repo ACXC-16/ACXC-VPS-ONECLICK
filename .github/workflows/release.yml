@@ -39,5 +39,5 @@ jobs:
             init.sh \
             "VPS-acxc16-${GITHUB_REF_NAME}.sh" \
             SHA256SUMS.txt \
-            --title "VPS新机一键脚本-acxc16 ${GITHUB_REF_NAME}" \
+            --title "ACXC16-VPS新机一键脚本 ${GITHUB_REF_NAME}" \
             --generate-notes
