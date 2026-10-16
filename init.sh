@@ -1583,10 +1583,11 @@ step_extras() {
     done
     printf '\n'
     if [ "$rcp" -eq 0 ]; then
-      ok "处理完了（可以接着选，输入 0 回主菜单）。"
+      ok "选中的项目都处理完了。"
     else
-      warn "有部分项目没装上，可稍后重试（输入 0 回主菜单）。"
+      warn "有部分项目没装上，可稍后重试。"
     fi
+    return "$rcp"
   done
 }
 # ============================== 计划与执行 ==================================
@@ -1733,7 +1734,7 @@ step_restart() {
         continue ;;
     esac
     printf '\n'
-    pause_enter
+    return "$rc"
   done
 }
 
@@ -1947,7 +1948,7 @@ step_uninstall() {
       *) warn "无效的选择：$choice（请输入 0-5）"; continue ;;
     esac
     printf '\n'
-    pause_enter
+    return 0
   done
 }
 

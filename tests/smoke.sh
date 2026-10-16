@@ -498,6 +498,26 @@ check_has "如实说明没有修改" "$CUR_OUT" "本次没有做任何修改"
 check_hasnt "没有「接下来请注意」" "$CUR_OUT" "接下来请注意"
 check_hasnt "没有多要一次回车" "$CUR_OUT" "（按回车继续）"
 
+echo "== 31) 二级菜单做完动作后不再重复显示列表 =="
+CUR_OUT="$WORK/norepeat.out"
+rc="$(printf '7\n3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "重启流程退出码" "0" "$rc"
+n="$(grep -c '要重启哪些服务' "$CUR_OUT")"
+check "子菜单只显示一次" "1" "$n"
+check_has "结果后回到主菜单" "$CUR_OUT" "操作菜单"
+
+CUR_OUT="$WORK/norepeat2.out"
+rc="$(printf '3\n1\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "工具流程退出码" "0" "$rc"
+n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
+check "工具列表只显示一次" "1" "$n"
+
+CUR_OUT="$WORK/norepeat3.out"
+rc="$(printf '8\n3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "卸载流程退出码" "0" "$rc"
+n="$(grep -c '卸载 / 清理（可以只做其中几项）' "$CUR_OUT")"
+check "卸载菜单只显示一次" "1" "$n"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
