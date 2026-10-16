@@ -1756,6 +1756,9 @@ step_restart() {
         # 成功了就会 exec 重新载入，不会再走到下面
         restart_script || rc=1
         return "$rc" ;;
+      "")
+        info "请输入编号（0-4）；0 = 返回主菜单"
+        continue ;;
       *)
         warn "无效的选择：$choice（请输入 0-4）"
         continue ;;
@@ -1961,6 +1964,7 @@ step_uninstall() {
       3) uninstall_log ;;
       4) uninstall_configs ;;
       5) uninstall_all ;;
+      "") info "请输入编号（0-5）；0 = 返回主菜单"; continue ;;
       *) warn "无效的选择：$choice（请输入 0-5）"; continue ;;
     esac
     printf '\n'
@@ -2126,17 +2130,33 @@ TERM_LINES=24
 TERM_COLS=80
 TERM_SIZED=0
 
-detect_term_size() { # 只在真终端里量一次（一次 stty，开销可忽略）
-  local sz=""
+detect_term_size() { # 只在真终端里量一次（优先用 bash 的 LINES/COLUMNS，其次 stty / tput）
+  local sz="" t=""
   [ "$TERM_SIZED" -eq 1 ] && return 0
   [ "$TTY_OK" -eq 1 ] || return 0
   TERM_SIZED=1
-  sz="$(stty size < /dev/tty 2>/dev/null)" || sz=""
-  case "$sz" in
-    [0-9]*' '[0-9]*)
-      TERM_LINES="${sz%% *}"
-      TERM_COLS="${sz##* }" ;;
-  esac
+
+  # bash 自己维护的 LINES / COLUMNS（交互式 shell 里最准，且不额外起进程）
+  case "${LINES:-}" in ''|*[!0-9]*) ;; *) TERM_LINES="$LINES" ;; esac
+  case "${COLUMNS:-}" in ''|*[!0-9]*) ;; *) TERM_COLS="$COLUMNS" ;; esac
+
+  # 量不到或者明显还是默认值，再用 stty / tput 补一次
+  if [ "$TERM_LINES" -le 24 ] || [ "$TERM_COLS" -le 80 ]; then
+    sz="$(stty size < /dev/tty 2>/dev/null)" || sz=""
+    case "$sz" in
+      [0-9]*' '[0-9]*)
+        TERM_LINES="${sz%% *}"
+        TERM_COLS="${sz##* }" ;;
+      *)
+        if have tput; then
+          t="$(tput lines 2>/dev/null)" || t=""
+          case "$t" in ''|*[!0-9]*) ;; *) TERM_LINES="$t" ;; esac
+          t="$(tput cols 2>/dev/null)" || t=""
+          case "$t" in ''|*[!0-9]*) ;; *) TERM_COLS="$t" ;; esac
+        fi ;;
+    esac
+  fi
+
   case "$TERM_LINES" in ''|*[!0-9]*) TERM_LINES=24 ;; esac
   case "$TERM_COLS" in ''|*[!0-9]*) TERM_COLS=80 ;; esac
   [ "$TERM_LINES" -lt 10 ] && TERM_LINES=24
@@ -2192,6 +2212,7 @@ menu_read_choice() { # 结果放 REPLY（清洗后的字符串）
         warn "没认出输入来（可能是按了方向键）：请直接输入数字，例如 1"
         continue
       fi
+      info "请输入要执行的项目编号（例如 1）；要退出请输入 0"
       continue
     fi
     REPLY="$cleaned"
