@@ -630,6 +630,27 @@ rc="$(printf '\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-
 check "空回车退出码" "0" "$rc"
 check_has "空回车给出提示" "$CUR_OUT" "请输入要执行的项目编号"
 
+echo "== 36) 工具菜单 4 = 安装 UFW：必须先放行 SSH 再启用 =="
+CUR_OUT="$WORK/ufw.out"
+rc="$(printf '3\n4\nn\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "UFW 流程退出码" "0" "$rc"
+check_has "会安装 ufw" "$CUR_OUT" "apt-get -y install ufw"
+check_has "放行了 SSH 端口" "$CUR_OUT" "ufw allow 22/tcp"
+check_has "会启用防火墙" "$CUR_OUT" "ufw --force enable"
+la="$(grep -n 'ufw allow 22/tcp' "$CUR_OUT" | head -n 1 | cut -d: -f1)"
+le="$(grep -n 'ufw --force enable' "$CUR_OUT" | head -n 1 | cut -d: -f1)"
+if [ -n "$la" ] && [ -n "$le" ] && [ "$la" -lt "$le" ]; then
+  ok "安全顺序正确：先放行(${la}) → 再启用(${le})"
+else
+  bad "顺序不对（放行=$la 启用=$le）"
+fi
+check_has "提示了失联后的补救办法" "$CUR_OUT" "ufw disable"
+
+CUR_OUT="$WORK/ufw-rec.out"
+rc="$(printf '3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "回车只装推荐项退出码" "0" "$rc"
+check_hasnt "推荐项里不含 ufw" "$CUR_OUT" "apt-get -y install ufw"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
