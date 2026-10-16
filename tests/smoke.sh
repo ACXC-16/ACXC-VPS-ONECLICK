@@ -599,6 +599,7 @@ STUBL="$WORK/lstub"
 mkdir -p "$STUBL"
 # shellcheck disable=SC2016  # 这两行是要写进桩脚本的字面量，故意用单引号
 printf '#!/bin/sh\necho "<<CLEAR>>"\n' >"$STUBL/clear"
+# shellcheck disable=SC2016
 printf '#!/bin/sh\nif [ "$1" = "size" ]; then echo "40 100"; fi\n' >"$STUBL/stty"
 chmod +x "$STUBL/clear" "$STUBL/stty"
 CUR_OUT="$WORK/margin.out"
