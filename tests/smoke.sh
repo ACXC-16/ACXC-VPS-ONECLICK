@@ -558,8 +558,8 @@ rc="$(printf '0\n' | PATH="$STUBT:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/i
 check "退出码" "0" "$rc"
 seq3="$(grep -oE '<<CLEAR>>|0\) 退出' "$CUR_OUT" | tr '\n' '|')"
 case "$seq3" in
-  *"0) 退出|<<CLEAR>>"*) ok "退出前清屏了" ;;
-  *) bad "退出时没有清屏：$seq3" ;;
+  *"0) 退出|<<CLEAR>>"*) bad "退出时不该清屏（会丢掉上面的历史）：$seq3" ;;
+  *) ok "退出时保留历史，没有清屏" ;;
 esac
 
 CUR_OUT="$WORK/clear4.out"
@@ -664,12 +664,11 @@ CUR_OUT="$WORK/farewell.out"
 rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
 check_has "退出时打印告别语" "$CUR_OUT" "已退出"
-blank3="$(tail -n 20 "$CUR_OUT" | grep -c '^[[:space:]]*$')"
-if [ "$blank3" -ge 3 ]; then
-  ok "退出画面留白 ${blank3} 行（提示符不会贴在左上角）"
-else
-  bad "退出画面留白不足（${blank3} 行）"
-fi
+lastline="$(tail -n 3 "$CUR_OUT" | grep -v '^[[:space:]]*$' | tail -n 1)"
+case "$lastline" in
+  *"已退出"*) ok "告别语在最后，历史都保留在上面" ;;
+  *) bad "退出收尾不对：[$lastline]" ;;
+esac
 # 非交互（管道）下不应该打印告别语，避免污染脚本输出
 CUR_OUT="$WORK/farewell-pipe.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
