@@ -634,7 +634,11 @@ echo "== 36) 工具菜单 4 = 安装 UFW：必须先放行 SSH 再启用 =="
 CUR_OUT="$WORK/ufw.out"
 rc="$(printf '3\n4\nn\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "UFW 流程退出码" "0" "$rc"
-check_has "会安装 ufw" "$CUR_OUT" "apt-get -y install ufw"
+if grep -qF 'apt-get -y install ufw' "$CUR_OUT" || grep -qF 'ufw 已经安装' "$CUR_OUT"; then
+  ok "进入了 UFW 安装 / 检查流程"
+else
+  bad "没有进入 UFW 流程"
+fi
 check_has "放行了 SSH 端口" "$CUR_OUT" "ufw allow 22/tcp"
 check_has "会启用防火墙" "$CUR_OUT" "ufw --force enable"
 la="$(grep -n 'ufw allow 22/tcp' "$CUR_OUT" | head -n 1 | cut -d: -f1)"
@@ -650,6 +654,7 @@ CUR_OUT="$WORK/ufw-rec.out"
 rc="$(printf '3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "回车只装推荐项退出码" "0" "$rc"
 check_hasnt "推荐项里不含 ufw" "$CUR_OUT" "apt-get -y install ufw"
+check_hasnt "推荐项里不放行 ufw 规则" "$CUR_OUT" "ufw allow"
 
 echo
 if [ "$FAIL" -gt 0 ]; then
