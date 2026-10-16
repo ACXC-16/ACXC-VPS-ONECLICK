@@ -742,7 +742,7 @@ step_sysupdate() {
     g_label+=("$(printf '%s%*s' "$p" "$gp" "")")
   done
 
-  while [ "$ASSUME_YES" -eq 0 ]; do
+  if [ "$ASSUME_YES" -eq 0 ]; then
     printf '\n%s\n' "  ${C_BLD}可升级的项目：${C_RST}"
     printf '  %s1)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[0]}" "${driver:-（无）}"
     printf '  %s2)%s %s %s\n' "${C_GRN}" "${C_RST}" "${g_label[1]}" "${firmware:-（无）}"
@@ -750,35 +750,37 @@ step_sysupdate() {
     printf '  %s0)%s 返回（什么都不做）\n' "${C_DIM}" "${C_RST}"
     printf '\n'
     info "要升级哪几项就输入哪几个编号，多个编号之间要用空格隔开（例如：1 3）；直接回车＝全升级"
-    if ! read_line "请选择"; then return 1; fi
+    while :; do
+      if ! read_line "请选择"; then return 1; fi
 
-    if [ -z "$(trim "$REPLY")" ]; then
-      picked="1 2 3"
-    else
-      sel="$(trim "$(menu_clean_input "$REPLY")")"
-      case "$sel" in
-        0|q|Q) return 0 ;;
-      esac
-      ok=1
-      picked=""
-      # shellcheck disable=SC2086
-      for tok in $(printf '%s' "$sel" | tr ' ' '\n'); do
-        [ -n "$tok" ] || continue
-        case "$tok" in
-          *[!0-9]*) ok=0; break ;;
+      if [ -z "$(trim "$REPLY")" ]; then
+        picked="1 2 3"
+      else
+        sel="$(trim "$(menu_clean_input "$REPLY")")"
+        case "$sel" in
+          0|q|Q) return 0 ;;
         esac
-        if [ "$tok" -lt 1 ] || [ "$tok" -gt 3 ]; then ok=0; break; fi
-        case " $picked " in
-          *" $tok "*) ;;
-          *) picked="${picked}${picked:+ }${tok}" ;;
-        esac
-      done
-      if [ "$ok" -eq 1 ] && [ -n "$picked" ]; then break; fi
-      warn "编号不对：请输入 1 / 2 / 3，多个编号之间用空格隔开（例如：1 3）"
-      continue
-    fi
-    break
-  done
+        ok=1
+        picked=""
+        # shellcheck disable=SC2086
+        for tok in $(printf '%s' "$sel" | tr ' ' '\n'); do
+          [ -n "$tok" ] || continue
+          case "$tok" in
+            *[!0-9]*) ok=0; break ;;
+          esac
+          if [ "$tok" -lt 1 ] || [ "$tok" -gt 3 ]; then ok=0; break; fi
+          case " $picked " in
+            *" $tok "*) ;;
+            *) picked="${picked}${picked:+ }${tok}" ;;
+          esac
+        done
+        if [ "$ok" -eq 1 ] && [ -n "$picked" ]; then break; fi
+        warn "编号不对：请输入 1 / 2 / 3，多个编号之间用空格隔开（例如：1 3）"
+        continue
+      fi
+      break
+    done
+  fi
   [ "$ASSUME_YES" -eq 1 ] && picked="1 2 3"
 
   # shellcheck disable=SC2086
@@ -1618,18 +1620,18 @@ step_extras() {
     g_label+=("$(printf '%s%*s' "${g_title[$i]}" "$pad" "")")
   done
 
+  printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
+  for i in "${!g_title[@]}"; do
+    if [ "${g_rec[$i]}" = y ]; then
+      printf '  %s%2d)%s %s %s推荐%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "${C_GRN}" "${C_RST}"
+    else
+      printf '  %s%2d)%s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_title[$i]}"
+    fi
+  done
+  printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
+  printf '\n'
+  info "多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部"
   while :; do
-    printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
-    for i in "${!g_title[@]}"; do
-      if [ "${g_rec[$i]}" = y ]; then
-        printf '  %s%2d)%s %s %s推荐%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "${C_GRN}" "${C_RST}"
-      else
-        printf '  %s%2d)%s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_title[$i]}"
-      fi
-    done
-    printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
-    printf '\n'
-    info "多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部"
 
     if [ "$ASSUME_YES" -eq 1 ]; then
       PLAN_TOOLS=()
@@ -1874,14 +1876,14 @@ restart_service_now() { # $1=ssh|fail2ban
 step_restart() {
   local choice="" rc=0
   screen_header "重启服务"
+  printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
+  printf '  %s3)%s 重启脚本（重新载入，刚更新过脚本就用它）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s4)%s 全部重启（SSH + fail2ban + 脚本）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
+  printf '\n'
+  info "重启 SSH 不会断开你已经登录的连接。"
   while :; do
-    printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
-    printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
-    printf '  %s3)%s 重启脚本（重新载入，刚更新过脚本就用它）\n' "${C_GRN}" "${C_RST}"
-    printf '  %s4)%s 全部重启（SSH + fail2ban + 脚本）\n' "${C_GRN}" "${C_RST}"
-    printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
-    printf '\n'
-    info "重启 SSH 不会断开你已经登录的连接。"
     if ! read_line "请选择"; then return 1; fi
     choice="$(trim "$(menu_clean_input "$REPLY")")"
 
@@ -2104,15 +2106,15 @@ uninstall_all() {
 step_uninstall() {
   local choice=""
   screen_header "卸载 / 清理"
+  printf '%s\n' "  ${C_BLD}可以只做其中几项（选 0 返回主菜单）：${C_RST}"
+  printf '  %s1)%s 删除快捷命令与脚本缓存（acxc）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s2)%s 卸载脚本装过的常用工具（含 CPU 微码）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s3)%s 删除运行日志\n' "${C_GRN}" "${C_RST}"
+  printf '  %s4)%s 还原 SSH / 删除 fail2ban、ufw、BBR、Swap 配置\n' "${C_GRN}" "${C_RST}"
+  printf '  %s5)%s 完全卸载（1-4 全做，并可选删除备份）\n' "${C_YEL}" "${C_RST}"
+  printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
+  printf '\n'
   while :; do
-    printf '%s\n' "  ${C_BLD}可以只做其中几项（选 0 返回主菜单）：${C_RST}"
-    printf '  %s1)%s 删除快捷命令与脚本缓存（acxc）\n' "${C_GRN}" "${C_RST}"
-    printf '  %s2)%s 卸载脚本装过的常用工具（含 CPU 微码）\n' "${C_GRN}" "${C_RST}"
-    printf '  %s3)%s 删除运行日志\n' "${C_GRN}" "${C_RST}"
-    printf '  %s4)%s 还原 SSH / 删除 fail2ban、ufw、BBR、Swap 配置\n' "${C_GRN}" "${C_RST}"
-    printf '  %s5)%s 完全卸载（1-4 全做，并可选删除备份）\n' "${C_YEL}" "${C_RST}"
-    printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
-    printf '\n'
     if ! read_line "请选择"; then return 1; fi
     choice="$(trim "$(menu_clean_input "$REPLY")")"
 
@@ -2472,10 +2474,18 @@ menu_loop() {
   while :; do
     show_status_table
     show_menu
-    if ! menu_read_choice; then
-      break
-    fi
-    choice="$REPLY"
+    # 先把选择问清楚：输入不合法的就地重问，不重复画菜单
+    while :; do
+      if ! menu_read_choice; then
+        printf '\n'
+        return 0
+      fi
+      choice="$REPLY"
+      case "$choice" in
+        0|q|Q|exit|quit|1|2|3|4|5|6|7|8) break ;;
+        *) warn "无效的选择：$choice（请输入 0-8；退出请输入 0）" ;;
+      esac
+    done
     NO_CHANGE=0
 
     case "$choice" in
@@ -2533,7 +2543,7 @@ menu_loop() {
         if [ "$NO_CHANGE" -eq 1 ]; then refresh_screen; else pause_enter; refresh_screen; fi
         ;;
       *)
-        warn "无效的选择：$choice（请输入 0-8）"
+        warn "无效的选择：$choice（请输入 0-8；退出请输入 0）"
         ;;
     esac
   done

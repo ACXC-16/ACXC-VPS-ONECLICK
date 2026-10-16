@@ -732,6 +732,31 @@ rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sy
 check "无人值守退出码" "0" "$rc"
 check_hasnt "无人值守不切备用屏幕（输出留在正常屏幕）" "$CUR_OUT" "?1049"
 
+echo "== 43) 输入不合法时就地重问：菜单/列表不重复出现 =="
+CUR_OUT="$WORK/invalid-main.out"
+rc="$(printf 'acxc\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "非法输入后仍能正常退出" "0" "$rc"
+n="$(grep -c '操作菜单' "$CUR_OUT")"
+check "主菜单只出现一次" "1" "$n"
+check_has "给出无效提示" "$CUR_OUT" "无效的选择：acxc"
+check_has "提示里带合法范围" "$CUR_OUT" "请输入 0-8"
+n="$(grep -c '无效的选择：acxc' "$CUR_OUT")"
+check "无效提示只出现一次" "1" "$n"
+
+CUR_OUT="$WORK/invalid-restart.out"
+rc="$(printf '7\nxx\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "重启菜单非法输入退出码" "0" "$rc"
+n="$(grep -c '重启 SSH 服务（sshd）' "$CUR_OUT")"
+check "重启列表只出现一次" "1" "$n"
+check_has "重启菜单给出无效提示" "$CUR_OUT" "无效的选择：xx"
+
+CUR_OUT="$WORK/invalid-tools.out"
+rc="$(printf '3\n99\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "工具菜单越界退出码" "0" "$rc"
+n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
+check "工具列表只出现一次" "1" "$n"
+check_has "越界提示" "$CUR_OUT" "编号不对"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
