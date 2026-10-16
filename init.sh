@@ -69,7 +69,6 @@ GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
 SSH_PORT_CHANGED=""
 NO_CHANGE=0
-SESSION_CHANGED=0
 
 # 交互界面：状态表 + 编号菜单（纯文字，任何终端都能用；不支持图形方框是有意为之）
 
@@ -805,7 +804,6 @@ step_sysupdate() {
       -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
       -o Dpkg::Lock::Timeout=900; then
       ok "升级完成"
-      SESSION_CHANGED=1
     else
       warn "升级过程中出现错误"
       rc=1
@@ -948,7 +946,6 @@ ssh_apply_port() {
     done
   fi
   info "写入 SSH 端口配置：$(trim "$SSH_M_PORTS" | tr -s ' ')"
-  [ "$DRY_RUN" -eq 0 ] && SESSION_CHANGED=1
   if ! ssh_write_managed; then
     err "写入 SSH 配置失败，已回滚"
     ssh_restore_backup
@@ -1071,7 +1068,6 @@ passwd_apply() {
 
   if printf 'root:%s\n' "$pw" | chpasswd; then
     ok "root 密码已修改成功"
-    SESSION_CHANGED=1
   else
     err "chpasswd 执行失败，密码未修改"
     pw=""
@@ -1231,8 +1227,6 @@ step_access() {
 
   if [ -z "$SSH_PORT_CHANGED" ] && [ -z "$NEW_ROOT_PASSWORD" ]; then
     mark_no_change
-  else
-    SESSION_CHANGED=1
   fi
   return "$rc"
 }
@@ -1295,7 +1289,6 @@ EOF
   if have fail2ban-client && fail2ban-client status sshd >/dev/null 2>&1; then
     banned="$(fail2ban-client status sshd 2>/dev/null | awk '/Currently banned/{print $NF}')"
     ok "fail2ban 已启用并保护 sshd（当前封禁 ${banned:-0} 个 IP）"
-  [ "$DRY_RUN" -eq 0 ] && SESSION_CHANGED=1
     return 0
   fi
 
@@ -1306,7 +1299,6 @@ EOF
     sleep 2
     if have fail2ban-client && fail2ban-client status sshd >/dev/null 2>&1; then
       ok "fail2ban 已启用（日志文件后端）"
-  [ "$DRY_RUN" -eq 0 ] && SESSION_CHANGED=1
       return 0
     fi
   fi
@@ -1365,7 +1357,6 @@ create_swap() {
   printf '%s\n' 'vm.swappiness=10' >/etc/sysctl.d/99-acxc-vps-swap.conf
   sysctl -q -w vm.swappiness=10 >/dev/null 2>&1 || true
   ok "Swap 已启用：$(free -h 2>/dev/null | awk '/^Swap:/{print $2}')"
-  SESSION_CHANGED=1
   return 0
 }
 
@@ -1391,7 +1382,6 @@ set_timezone() {
   fi
   if [ "$DRY_RUN" -eq 0 ]; then
     ok "时区已设置为 $tz（当前：$(date '+%F %T %Z')）"
-    SESSION_CHANGED=1
   fi
   return "$rc"
 }
@@ -1451,7 +1441,6 @@ EOF
   qd="$(sysctl -n net.core.default_qdisc 2>/dev/null)"
   if [ "$cc" = "bbr" ]; then
     ok "BBR 已开启（拥塞控制：${cc}，队列：${qd:-未知}，调整前：${befor_cc:-未知}）"
-    SESSION_CHANGED=1
   else
     warn "BBR 未生效（当前：${cc:-未知}）。OpenVZ/LXC 等共享内核环境通常不支持。"
     return 1
@@ -1572,7 +1561,6 @@ step_extras() {
       # shellcheck disable=SC2086
       if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
         ok "已安装：${title}"
-        SESSION_CHANGED=1
       else
         warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
         for sel in $pkgs; do
@@ -1758,12 +1746,12 @@ step_restart() {
     case "$choice" in
       0|q|Q) mark_no_change; return 0 ;;
       1)
-        if restart_service_now ssh; then SESSION_CHANGED=1; ok "SSH 服务已重启"; else rc=1; fi ;;
+        if restart_service_now ssh; then ok "SSH 服务已重启"; else rc=1; fi ;;
       2)
-        if restart_service_now fail2ban; then SESSION_CHANGED=1; ok "fail2ban 已重启"; else rc=1; fi ;;
+        if restart_service_now fail2ban; then ok "fail2ban 已重启"; else rc=1; fi ;;
       3)
-        if restart_service_now ssh; then SESSION_CHANGED=1; ok "SSH 服务已重启"; else rc=1; fi
-        if restart_service_now fail2ban; then SESSION_CHANGED=1; ok "fail2ban 已重启"; else rc=1; fi ;;
+        if restart_service_now ssh; then ok "SSH 服务已重启"; else rc=1; fi
+        if restart_service_now fail2ban; then ok "fail2ban 已重启"; else rc=1; fi ;;
       4)
         # 成功了就会 exec 重新载入，不会再走到下面
         restart_script || rc=1
@@ -1779,11 +1767,9 @@ step_restart() {
 
 # ============================== 卸载 / 清理 =================================
 uninstall_shortcut() {
-  local did=0
   if [ -f "${SHORTCUT_DIR}/${SHORTCUT_NAME}" ]; then
     if run rm -f "${SHORTCUT_DIR}/${SHORTCUT_NAME}"; then
       ok "已删除快捷命令：${SHORTCUT_DIR}/${SHORTCUT_NAME}"
-      did=1
     fi
   else
     info "没有找到快捷命令：${SHORTCUT_DIR}/${SHORTCUT_NAME}"
@@ -1791,10 +1777,8 @@ uninstall_shortcut() {
   if [ -d "$CACHE_DIR" ]; then
     if run rm -rf "$CACHE_DIR"; then
       ok "已删除脚本缓存：${CACHE_DIR}"
-      did=1
     fi
   fi
-  [ "$did" -eq 1 ] && SESSION_CHANGED=1
   return 0
 }
 
@@ -1804,14 +1788,14 @@ uninstall_log() {
     [ -n "$f" ] || continue
     [ -f "$f" ] || continue
     if ask_yn "删除日志文件 $f ？" y; then
-      run rm -f "$f" && { ok "已删除：$f"; SESSION_CHANGED=1; }
+      run rm -f "$f" && { ok "已删除：$f"; }
     fi
   done
   return 0
 }
 
 uninstall_tools() {
-  local entry pkgs="" p="" list="" skip="" removed=0
+  local entry pkgs="" p="" list="" skip=""
   for entry in "${TOOL_ITEMS[@]}"; do
     pkgs="${entry%%|*}"
     case "$pkgs" in
@@ -1836,7 +1820,6 @@ uninstall_tools() {
       # shellcheck disable=SC2086
       if run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge $list; then
         ok "已卸载常用工具"
-        removed=1
       else
         warn "卸载时有报错，可稍后手动检查"
       fi
@@ -1850,15 +1833,11 @@ uninstall_tools() {
   for p in intel-microcode amd64-microcode; do
     if have dpkg && dpkg -s "$p" >/dev/null 2>&1; then
       if ask_yn "是否卸载 CPU 微码包 ${p}？（一般是安全更新，卸载后建议重启）" n; then
-        run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "$p" && {
-          ok "已卸载：$p"
-          removed=1
-        }
+        run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "$p" && ok "已卸载：$p"
       fi
     fi
   done
   info "内核与内核模块不会动（误删可能导致无法开机），需要的话请手动处理。"
-  [ "$removed" -eq 1 ] && SESSION_CHANGED=1
   return 0
 }
 
@@ -1873,7 +1852,6 @@ uninstall_configs() {
       run cp -a "$MANAGED_SSHD_CONF" "/root/acxc-vps-backup/removed-${stamp}-00-acxc-vps.conf" 2>/dev/null || true
       if run rm -f "$MANAGED_SSHD_CONF"; then
         ok "已删除：${MANAGED_SSHD_CONF}"
-        SESSION_CHANGED=1
       fi
       if [ -f /etc/ssh/sshd_config ]; then
         run remove_managed_inline_block /etc/ssh/sshd_config || true
@@ -1902,12 +1880,11 @@ uninstall_configs() {
   # fail2ban 配置（可选卸载软件包）
   if [ -f "$FAIL2BAN_CONF" ]; then
     if ask_yn "删除 fail2ban 配置（${FAIL2BAN_CONF}）？" y; then
-      run rm -f "$FAIL2BAN_CONF" && { ok "已删除：${FAIL2BAN_CONF}"; SESSION_CHANGED=1; }
+      run rm -f "$FAIL2BAN_CONF" && { ok "已删除：${FAIL2BAN_CONF}"; }
       if have fail2ban-client; then
         if ask_yn "是否顺便卸载 fail2ban 软件包？" n; then
           run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge fail2ban && {
             ok "已卸载 fail2ban"
-            SESSION_CHANGED=1
           }
         else
           if have systemctl; then run systemctl restart fail2ban || true; fi
@@ -1922,7 +1899,7 @@ uninstall_configs() {
   # BBR
   if [ -f "$SYSCTL_BBR_CONF" ]; then
     if ask_yn "关闭并删除 BBR 设置（${SYSCTL_BBR_CONF}）？" y; then
-      run rm -f "$SYSCTL_BBR_CONF" && { ok "已删除：${SYSCTL_BBR_CONF}"; SESSION_CHANGED=1; }
+      run rm -f "$SYSCTL_BBR_CONF" && { ok "已删除：${SYSCTL_BBR_CONF}"; }
       if [ "$DRY_RUN" -eq 0 ]; then
         sysctl --system >/dev/null 2>&1 || true
         ok "当前拥塞控制：$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
@@ -1935,7 +1912,7 @@ uninstall_configs() {
     if ask_yn "关闭并删除 Swap 交换文件（${SWAPFILE}）？" y; then
       run swapoff "$SWAPFILE" 2>/dev/null || true
       run sed -i '\|# acxc-vps$|d' /etc/fstab || true
-      run rm -f "$SWAPFILE" /etc/sysctl.d/99-acxc-vps-swap.conf && { ok "已删除 Swap 与相关配置"; SESSION_CHANGED=1; }
+      run rm -f "$SWAPFILE" /etc/sysctl.d/99-acxc-vps-swap.conf && { ok "已删除 Swap 与相关配置"; }
     fi
   fi
   return 0
@@ -1954,7 +1931,7 @@ uninstall_all() {
   uninstall_shortcut
   if [ -d /root/acxc-vps-backup ]; then
     if ask_yn "是否一并删除备份目录 /root/acxc-vps-backup ？（删掉后无法再用脚本回滚）" n; then
-      run rm -rf /root/acxc-vps-backup && { ok "已删除备份目录"; SESSION_CHANGED=1; }
+      run rm -rf /root/acxc-vps-backup && { ok "已删除备份目录"; }
     fi
   fi
   printf '\n'
@@ -2387,6 +2364,7 @@ run_plan() {
       ok "步骤完成：${PLAN_TITLES[$i]}"
     else
       err "步骤失败（退出码 ${rc}）：${PLAN_TITLES[$i]}"
+      FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
     RESULT_NAMES+=("${PLAN_TITLES[$i]}")
     RESULT_STATES+=("$rc")
@@ -2394,55 +2372,8 @@ run_plan() {
   done
 }
 
-print_summary() {
-  local i=0 total=${#RESULT_NAMES[@]}
-  FAILED_COUNT=0
-  if [ "$total" -eq 0 ]; then
-    return 0
-  fi
-  title "执行结果"
-  for i in "${!RESULT_NAMES[@]}"; do
-    if [ "${RESULT_STATES[$i]}" -eq 0 ]; then
-      printf '  %s[成功]%s %s\n' "${C_GRN}" "${C_RST}" "${RESULT_NAMES[$i]}"
-    else
-      printf '  %s[失败]%s %s\n' "${C_RED}" "${C_RST}" "${RESULT_NAMES[$i]}"
-      FAILED_COUNT=$((FAILED_COUNT + 1))
-    fi
-  done
-  printf '\n'
-  return 0
-}
-print_next_steps() {
-  local keep=""
 
-  # 这次什么都没改 → 不啰嗦
-  [ "$SESSION_CHANGED" -eq 1 ] || return 0
 
-  title "接下来请注意"
-  keep="$(trim "$(printf '%s' "$SSH_M_PORTS" | awk '{$1=""; sub(/^ +/,""); print}')")"
-
-  if [ -n "$NEW_ROOT_PASSWORD" ] || [ -n "$SSH_PORT_CHANGED" ]; then
-    printf '%s\n' "  ${C_BLD}${C_GRN}★ 本次设置（请现在保存好）：${C_RST}"
-    [ -n "$NEW_ROOT_PASSWORD" ] && printf '     %sroot 密码：%s%s\n' "${C_BLD}" "$NEW_ROOT_PASSWORD" "${C_RST}"
-    [ -n "$SSH_PORT_CHANGED" ] && printf '     %sSSH 端口：%s%s\n' "${C_BLD}" "$SSH_PORT_CHANGED" "${C_RST}"
-    printf '\n'
-  fi
-
-  if [ -n "$SSH_PORT_CHANGED" ]; then
-    printf '  * 先不要关闭当前会话，另开一个终端执行：ssh -p %s root@<服务器IP>\n' "$SSH_PORT_CHANGED"
-    printf '  * 云服务商控制台的「安全组 / 防火墙」也要放行 %s/TCP，否则连不上\n' "$SSH_PORT_CHANGED"
-    [ -n "$keep" ] && printf '  * 过渡期保留的旧端口：%s（验证新端口能登录后再删掉）\n' "$keep"
-    [ -n "$LAST_SSH_BACKUP" ] && printf '  * 万一连不上：用 VNC / 云控制台登录后执行 cp -a %s/. /etc/ssh/ && systemctl restart ssh\n' "$LAST_SSH_BACKUP"
-  fi
-  if [ -n "$NEW_ROOT_PASSWORD" ]; then
-    printf '  * 新密码登录：ssh -p %s root@<服务器IP>\n' "${SSH_PORT_CHANGED:-$(trim "$(current_ssh_ports)")}"
-    [ "$NEW_ROOT_PASSWORD" = "$DEFAULT_ROOT_PASSWORD" ] && printf '  * %s默认密码容易被猜到，建议尽快改成自己的强密码（菜单第 2 项）%s\n' "${C_YEL}" "${C_RST}"
-  fi
-  [ "$NEED_REBOOT" -eq 1 ] && printf '  * 装好了新内核 / 驱动，重启后才会生效（菜单 0 退出时会再问一次）\n'
-  printf '  * 再次运行本脚本可随时追加 / 调整设置（重复执行是安全的）\n'
-  printf '\n'
-  return 0
-}
 maybe_reboot() {
   local need=0 p=""
   if [ -f "$REBOOT_REQUIRED_FILE" ]; then need=1; fi
@@ -2676,8 +2607,7 @@ main() {
     menu_loop
   fi
 
-  print_summary
-  print_next_steps
+  # 退出时不再打印执行结果与提示（细节在执行时已经打印过）
   maybe_reboot
   if [ "$FAILED_COUNT" -gt 0 ]; then return 1; fi
   return 0

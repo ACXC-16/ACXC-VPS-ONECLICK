@@ -227,7 +227,7 @@ echo "== 12) 步骤失败要如实汇总并返回 1 =="
 CUR_OUT="$WORK/e.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-missing.sh" --force --dry-run --yes --only access)"
 check "退出码" "1" "$rc"
-check_has "汇总里有失败项" "$CUR_OUT" "[失败]"
+check_has "有步骤失败提示" "$CUR_OUT" "步骤失败"
 
 echo "== 13) 参数校验 =="
 CUR_OUT="$WORK/f.out"
@@ -335,7 +335,7 @@ else
   bad "没有生成可执行的 acxc"
 fi
 
-echo "== 21) 结束界面要列出本次设置的 SSH 端口和 root 密码 =="
+echo "== 21) 密码设置时当场显示，但不写进日志 =="
 STUB="$WORK/stub"
 mkdir -p "$STUB"
 cat >"$STUB/chpasswd" <<'EOF'
@@ -347,15 +347,12 @@ chmod +x "$STUB/chpasswd"
 {
   sed -e 's|^main "\$@"$||' -e 's|^exit \$?$||' "$ROOT/init.sh"
   printf 'DRY_RUN=0\nASSUME_YES=0\nCOLOR_OFF=1\nLOG_FILE="%s"\nSCRIPT_VERSION="1.0.0"\n' "$WORK/summary.log"
-  printf 'passwd_apply "%s" 0 >/dev/null 2>&1\n' "$(sed -n 's/^DEFAULT_ROOT_PASSWORD="\(.*\)"$/\1/p' "$ROOT/init.sh")"
-  printf 'SSH_M_PORTS="52052"\nSSH_PORT_CHANGED="52052"\n'
-  printf 'print_next_steps\n'
+  printf 'passwd_apply "%s" 0\n' "$(sed -n 's/^DEFAULT_ROOT_PASSWORD="\(.*\)"$/\1/p' "$ROOT/init.sh")"
 } >"$WORK/summary.sh"
 CUR_OUT="$WORK/summary.out"
 PATH="$STUB:$PATH" bash "$WORK/summary.sh" >"$CUR_OUT" 2>&1
-check_has "结束界面列出了本次设置的 root 密码" "$CUR_OUT" "root 密码：acxc1616"
-check_has "结束界面列出了本次设置的 SSH 端口" "$CUR_OUT" "SSH 端口：52052"
-check_has "提示用新密码登录" "$CUR_OUT" "ssh -p 52052 root@"
+check_has "设置密码时当场显示密码" "$CUR_OUT" "root 密码已设置为"
+check_has "显示的内容里带密码" "$CUR_OUT" "acxc1616"
 check_hasnt "明文密码不会写进日志文件" "$WORK/summary.log" "acxc1616"
 
 echo "== 22) 旧文件名迁移：vps-init → acxc-vps =="
@@ -479,16 +476,16 @@ echo "== 29) 执行结果：只列步骤名和成功/失败 =="
 CUR_OUT="$WORK/summary2.out"
 rc="$(printf '1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
-check_has "有执行结果标题" "$CUR_OUT" "执行结果"
-check_has "列出步骤名" "$CUR_OUT" "更新内核 / 驱动 / 固件"
-check_hasnt "不再有旧汇总文案" "$CUR_OUT" "执行结果汇总"
+check_has "步骤本身有输出" "$CUR_OUT" "步骤完成：更新内核 / 驱动 / 固件"
+check_hasnt "退出时不再打印执行结果" "$CUR_OUT" "执行结果"
+check_hasnt "退出时不再打印提示" "$CUR_OUT" "接下来请注意"
 
 echo "== 30) 有改动才给「接下来请注意」 =="
 CUR_OUT="$WORK/changed.out"
 rc="$(printf '2\n\n52052\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
-check_has "改了端口就给提示" "$CUR_OUT" "接下来请注意"
-check_has "提示里带新端口" "$CUR_OUT" "SSH 端口：52052"
+check_has "改动信息在步骤里就显示了" "$CUR_OUT" "本次改动"
+check_hasnt "退出时不再给提示" "$CUR_OUT" "接下来请注意"
 
 echo "== 30b) 端口没变 + 密码不改 → 不算改动，不提示、不多按回车 =="
 CUR_OUT="$WORK/nochange2.out"
@@ -567,7 +564,7 @@ case "$seq4" in
   *"0) 退出|<<CLEAR>>"*) ok "有改动时退出前也清屏" ;;
   *) bad "有改动时退出没清屏：$seq4" ;;
 esac
-check_has "退出后仍然给出提示" "$CUR_OUT" "接下来请注意"
+check_hasnt "退出时不再打印提示" "$CUR_OUT" "接下来请注意"
 
 echo "== 34) 重启脚本：真的会重新载入并重画菜单 =="
 # 造一份"非 root 也能跑（非 dry-run）"的副本，用来验证 exec 重新载入
@@ -592,6 +589,7 @@ if [ "$n" -ge 2 ]; then ok "重新载入后重新画了菜单（出现 ${n} 次�
 nb="$(grep -c 'ACXC16-VPS新机一键脚本 v1.0.0  ——' "$CUR_OUT")"
 if [ "$nb" -ge 2 ]; then ok "确实重新启动了一个新实例（横幅出现 ${nb} 次）"; else bad "没有真正重新启动（横幅只出现 ${nb} 次）"; fi
 check_has "重启后菜单正常" "$CUR_OUT" "0) 退出"
+check_hasnt "退出时不打印汇总" "$CUR_OUT" "执行结果"
 
 echo
 if [ "$FAIL" -gt 0 ]; then
