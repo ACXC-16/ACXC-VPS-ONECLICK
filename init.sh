@@ -1433,18 +1433,82 @@ create_swap() {
 }
 
 # ---------- 时区（供"常用工具 / BBR网络加速 / Swap"里调用） ----------
+# 常用时区（覆盖全球主要地区，输入编号或直接输时区名都可以）
+TZ_CHOICES=(
+  "Asia/Shanghai|中国（北京 / 上海）"
+  "Asia/Hong_Kong|中国香港"
+  "Asia/Taipei|中国台北"
+  "Asia/Tokyo|日本"
+  "Asia/Seoul|韩国"
+  "Asia/Singapore|新加坡 / 马来西亚"
+  "Asia/Bangkok|泰国 / 越南 / 印尼（UTC+7）"
+  "Asia/Kolkata|印度（UTC+5:30）"
+  "Asia/Dubai|阿联酋 / 中东（UTC+4）"
+  "Europe/Moscow|俄罗斯莫斯科"
+  "Europe/London|英国伦敦（UTC+0）"
+  "Europe/Paris|法国 / 德国 / 意大利（UTC+1）"
+  "America/New_York|美国东部"
+  "America/Chicago|美国中部"
+  "America/Denver|美国山地"
+  "America/Los_Angeles|美国西部"
+  "America/Sao_Paulo|巴西"
+  "Australia/Sydney|澳大利亚悉尼"
+  "UTC|协调世界时"
+)
+
 set_timezone() {
-  local tz="Asia/Shanghai" rc=0
+  local tz="Asia/Shanghai" rc=0 entry name desc i=0 tries=0
+
   if [ "$ASSUME_YES" -eq 0 ]; then
-    if ask_value "请输入时区" "Asia/Shanghai"; then tz="$REPLY"; fi
+    printf '\n%s\n' "  ${C_BLD}常用时区（输入编号即可，也可以直接输入时区名，例如 Asia/Tokyo）：${C_RST}"
+    for entry in "${TZ_CHOICES[@]}"; do
+      i=$((i + 1))
+      name="${entry%%|*}"
+      desc="${entry#*|}"
+      if [ "$i" -eq 1 ]; then
+        printf '  %s%2d)%s %-20s %s %s（默认）%s\n' "${C_CYN}" "$i" "${C_RST}" "$name" "$desc" "${C_DIM}" "${C_RST}"
+      else
+        printf '  %s%2d)%s %-20s %s\n' "${C_CYN}" "$i" "${C_RST}" "$name" "$desc"
+      fi
+    done
+    printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "保持当前时区（不改）"
+    printf '\n'
+    info "直接回车 = 1) Asia/Shanghai；也可以输入上面没有的时区，例如 Europe/Berlin"
+
+    while [ "$tries" -lt 3 ]; do
+      tries=$((tries + 1))
+      if ! ask_value "请输入时区（编号或名称）" "Asia/Shanghai"; then return 1; fi
+      tz="$REPLY"
+
+      case "$tz" in
+        0) info "保持当前时区（$(date +%Z)）"; return 0 ;;
+        ''|*[!0-9]*) ;;   # 不是纯数字 → 当成时区名
+        *)
+          if [ "$tz" -ge 1 ] && [ "$tz" -le "${#TZ_CHOICES[@]}" ]; then
+            tz="${TZ_CHOICES[$((tz - 1))]%%|*}"
+            info "已选择：$tz"
+          else
+            warn "编号超出范围（1-${#TZ_CHOICES[@]}，或 0 = 不改）"
+            continue
+          fi ;;
+      esac
+
+      case "$tz" in
+        *[!A-Za-z0-9_/+:-]*) warn "时区格式不合法：$tz"; continue ;;
+      esac
+      if [ -d /usr/share/zoneinfo ] && [ ! -f "/usr/share/zoneinfo/$tz" ]; then
+        warn "时区 $tz 不存在（用上面的编号选常用的就行）"
+        continue
+      fi
+      break
+    done
+
+    if [ "$tries" -ge 3 ] && [ -d /usr/share/zoneinfo ] && [ ! -f "/usr/share/zoneinfo/$tz" ]; then
+      warn "连续输错 3 次，保持当前时区（$(date +%Z)）"
+      return 1
+    fi
   fi
-  case "$tz" in
-    *[!A-Za-z0-9_/+:-]*) warn "时区格式不合法：$tz"; return 1 ;;
-  esac
-  if [ ! -f "/usr/share/zoneinfo/$tz" ]; then
-    warn "时区 $tz 不存在，保持原样（当前：$(date +%Z)）"
-    return 1
-  fi
+
   if have timedatectl && run timedatectl set-timezone "$tz"; then
     :
   else

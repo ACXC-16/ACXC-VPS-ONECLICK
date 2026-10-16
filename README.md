@@ -84,6 +84,19 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
   多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部
 ```
 
+**选时区**（在第 3 项菜单里）—— 会先把全球主要时区列成编号给你挑，也能直接输时区名：
+
+```
+  常用时区（输入编号即可，也可以直接输入时区名，例如 Asia/Tokyo）：
+   1) Asia/Shanghai        中国（北京 / 上海） （默认）
+   2) Asia/Hong_Kong       中国香港
+   ...
+  19) UTC                  协调世界时
+   0) 保持当前时区（不改）
+
+  直接回车 = 1) Asia/Shanghai；也可以输入上面没有的时区，例如 Europe/Berlin
+```
+
 **UFW 防火墙**（在第 3 项菜单里）—— 顺序是**先放行 SSH 端口、再启用**，避免把自己关在门外：
 自动识别当前 SSH 端口（含过渡期保留的旧端口）→ `ufw allow <端口>/tcp` → 才 `ufw enable`；可选放行 80/443。万一失联：云控制台登录后 `ufw disable`。
 
