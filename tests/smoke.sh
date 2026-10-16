@@ -659,6 +659,23 @@ check "回车只装推荐项退出码" "0" "$rc"
 check_hasnt "推荐项里不含 ufw" "$CUR_OUT" "apt-get -y install ufw"
 check_hasnt "推荐项里不放行 ufw 规则" "$CUR_OUT" "ufw allow"
 
+echo "== 37) 退出时有收尾画面（清屏 + 留白 + 告别语）=="
+CUR_OUT="$WORK/farewell.out"
+rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "退出时打印告别语" "$CUR_OUT" "已退出"
+blank3="$(tail -n 20 "$CUR_OUT" | grep -c '^[[:space:]]*$')"
+if [ "$blank3" -ge 3 ]; then
+  ok "退出画面留白 ${blank3} 行（提示符不会贴在左上角）"
+else
+  bad "退出画面留白不足（${blank3} 行）"
+fi
+# 非交互（管道）下不应该打印告别语，避免污染脚本输出
+CUR_OUT="$WORK/farewell-pipe.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
+check "无人值守退出码" "0" "$rc"
+check_hasnt "管道运行时不打印告别语" "$CUR_OUT" "已退出"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
