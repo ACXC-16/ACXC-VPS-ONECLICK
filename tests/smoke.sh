@@ -663,11 +663,12 @@ echo "== 37) 退出时有收尾画面（清屏 + 留白 + 告别语）=="
 CUR_OUT="$WORK/farewell.out"
 rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
-check_has "退出时打印告别语" "$CUR_OUT" "已退出"
+check_hasnt "退出时不打印告别语" "$CUR_OUT" "已退出"
+check_hasnt "退出时不提 acxc" "$CUR_OUT" "下次输入"
 lastline="$(tail -n 3 "$CUR_OUT" | grep -v '^[[:space:]]*$' | tail -n 1)"
 case "$lastline" in
-  *"已退出"*) ok "告别语在最后，历史都保留在上面" ;;
-  *) bad "退出收尾不对：[$lastline]" ;;
+  *"0) 退出"*) ok "退出后屏幕停在菜单，历史完整保留" ;;
+  *) bad "退出后最后一行不对：[$lastline]" ;;
 esac
 # 非交互（管道）下不应该打印告别语，避免污染脚本输出
 CUR_OUT="$WORK/farewell-pipe.out"

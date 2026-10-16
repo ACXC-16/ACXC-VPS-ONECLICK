@@ -2352,16 +2352,7 @@ detect_term_size() { # 只在真终端里量一次（优先用 bash 的 LINES/CO
 # 顶部留白：屏幕越高留得越多（约让内容落在屏幕上部 1/3 处）
 # 退场画面：清屏后留一点位置再打印一行淡淡的告别语，
 # 这样 shell 提示符不会孤零零贴在左上角（看起来像脚本正常工作结束）
-farewell_screen() {
-  [ "$TTY_OK" -eq 1 ] || return 0
-  printf '\n'
-  if [ -x "${SHORTCUT_DIR}/${SHORTCUT_NAME}" ]; then
-    printf '  %s已退出 · 下次输入 %s 就能再打开%s\n' "${C_DIM}" "${SHORTCUT_NAME}" "${C_RST}"
-  else
-    printf '  %s已退出%s\n' "${C_DIM}" "${C_RST}"
-  fi
-  return 0
-}
+
 
 screen_margin() {
   local n=0 i=0
@@ -2837,7 +2828,6 @@ steps_slugs() {
 
 main() {
   ORIG_ARGS=("$@")
-  local interactive=0
   prepare_log
   parse_args "$@"
   init_colors
@@ -2865,13 +2855,10 @@ main() {
   else
     # 交互式：状态表 + 编号菜单，循环执行直到选 0 退出
     menu_loop
-    interactive=1
   fi
 
   # 退出时不再打印执行结果与提示（细节在执行时已经打印过）
   maybe_reboot
-  # 交互式退场：清屏 + 留白 + 一行告别语
-  [ "$interactive" -eq 1 ] && farewell_screen
   if [ "$FAILED_COUNT" -gt 0 ]; then return 1; fi
   return 0
 }
