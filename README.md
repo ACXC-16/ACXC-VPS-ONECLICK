@@ -112,11 +112,11 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
   1) 删除快捷命令与脚本缓存（acxc）
   2) 卸载脚本装过的常用工具（含 CPU 微码）
   3) 删除运行日志
-  4) 还原 SSH / 删除 fail2ban、BBR、Swap 配置
+  4) 还原 SSH / 删除 fail2ban、ufw、BBR、Swap 配置
   5) 完全卸载（1-4 全做，并可选删除备份）
 ```
 
-每一项都会先问一次确认；完全卸载会把 SSH 恢复成系统原来的设置。`ca-certificates`、`gnupg` 会保留（卸了会影响下载/证书），**内核不会被删**（误删可能导致无法开机）。
+每一项都会先问一次确认，**这里的确认默认都是 `Y`**（一路回车就是全清），提示长这样：`是否顺便卸载 fail2ban 软件包？ [Y/n]`。`ca-certificates`、`gnupg` 会保留（卸了会影响下载/证书），**内核不会被删**（误删可能导致无法开机）。
 
 ## 说明
 

@@ -757,6 +757,16 @@ n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
 check "工具列表只出现一次" "1" "$n"
 check_has "越界提示" "$CUR_OUT" "编号不对"
 
+echo "== 44) 卸载流程的确认项默认都是 Y =="
+# 卸载相关函数里不允许再出现默认 N
+bad_region="$(awk 'NR>=1930 && NR<=2110 && /ask_yn .*" n;/' "$ROOT/init.sh" | wc -l | tr -d ' ')"
+check "卸载流程里没有默认 N 的确认" "0" "$bad_region"
+check_has "卸载软件包默认 Y" "$ROOT/init.sh" 'ask_yn "确认卸载上面这些软件包？" y'
+check_has "卸载 fail2ban 包默认 Y" "$ROOT/init.sh" 'ask_yn "是否顺便卸载 fail2ban 软件包？" y'
+check_has "卸载 ufw 包默认 Y" "$ROOT/init.sh" 'ask_yn "是否卸载 ufw 软件包？" y'
+check_has "完全卸载确认默认 Y" "$ROOT/init.sh" 'ask_yn "确认要完全卸载吗？" y'
+check_has "删备份目录默认 Y" "$ROOT/init.sh" '是否一并删除备份目录 /root/acxc-vps-backup ？（删掉后无法再用脚本回滚）" y'
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="

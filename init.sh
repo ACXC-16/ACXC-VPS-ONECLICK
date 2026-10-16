@@ -1967,7 +1967,7 @@ uninstall_tools() {
     info "没有检测到脚本装过的常用工具。"
   else
     info "将要卸载：${list}"
-    if ask_yn "确认卸载上面这些软件包？" n; then
+    if ask_yn "确认卸载上面这些软件包？" y; then
       # shellcheck disable=SC2086
       if run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge $list; then
         ok "已卸载常用工具"
@@ -1983,7 +1983,7 @@ uninstall_tools() {
   # CPU 微码（属于"更新过的驱动"）
   for p in intel-microcode amd64-microcode; do
     if have dpkg && dpkg -s "$p" >/dev/null 2>&1; then
-      if ask_yn "是否卸载 CPU 微码包 ${p}？（一般是安全更新，卸载后建议重启）" n; then
+      if ask_yn "是否卸载 CPU 微码包 ${p}？（一般是安全更新，卸载后建议重启）" y; then
         run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "$p" && ok "已卸载：$p"
       fi
     fi
@@ -2033,7 +2033,7 @@ uninstall_configs() {
     if ask_yn "删除 fail2ban 配置（${FAIL2BAN_CONF}）？" y; then
       run rm -f "$FAIL2BAN_CONF" && { ok "已删除：${FAIL2BAN_CONF}"; }
       if have fail2ban-client; then
-        if ask_yn "是否顺便卸载 fail2ban 软件包？" n; then
+        if ask_yn "是否顺便卸载 fail2ban 软件包？" y; then
           run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge fail2ban && {
             ok "已卸载 fail2ban"
           }
@@ -2065,7 +2065,7 @@ uninstall_configs() {
         run ufw --force disable && ok "ufw 已关闭"
       fi
     fi
-    if ask_yn "是否卸载 ufw 软件包？" n; then
+    if ask_yn "是否卸载 ufw 软件包？" y; then
       run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge ufw && ok "已卸载 ufw"
     fi
   fi
@@ -2084,7 +2084,7 @@ uninstall_configs() {
 uninstall_all() {
   warn "完全卸载会：删除快捷命令与缓存、受管的 SSH / fail2ban / BBR / Swap 配置、日志、以及脚本装过的工具包。"
   warn "SSH 会恢复到系统原来的设置（如果原来的端口是 22，请确保 22 已放行，否则可能连不上）。"
-  if ! ask_yn "确认要完全卸载吗？" n; then
+  if ! ask_yn "确认要完全卸载吗？" y; then
     info "已取消。"
     return 0
   fi
@@ -2093,7 +2093,7 @@ uninstall_all() {
   uninstall_log
   uninstall_shortcut
   if [ -d /root/acxc-vps-backup ]; then
-    if ask_yn "是否一并删除备份目录 /root/acxc-vps-backup ？（删掉后无法再用脚本回滚）" n; then
+    if ask_yn "是否一并删除备份目录 /root/acxc-vps-backup ？（删掉后无法再用脚本回滚）" y; then
       run rm -rf /root/acxc-vps-backup && { ok "已删除备份目录"; }
     fi
   fi
