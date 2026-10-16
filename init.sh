@@ -2191,6 +2191,8 @@ menu_loop() {
         n="$choice"
         PLAN_SLUGS=(); PLAN_TITLES=(); PLAN_FUNCS=()
         if plan_add "$(step_slug_by_index "$n")"; then
+          # 进二级菜单前先清屏：屏幕上只留这一步的内容
+          refresh_screen
           run_plan
           invalidate_status
           # 进去看了一眼、什么都没改 → 直接回主菜单，不再多按一次回车
@@ -2205,27 +2207,32 @@ menu_loop() {
         fi
         ;;
       4)
+        refresh_screen
         show_system_info
         pause_enter
         refresh_screen
         ;;
       5)
+        refresh_screen
         show_log_tail 40
         pause_enter
         refresh_screen
         ;;
       6)
+        refresh_screen
         update_script
         invalidate_status
         pause_enter
         refresh_screen
         ;;
       7)
+        refresh_screen
         step_restart
         invalidate_status
         if [ "$NO_CHANGE" -eq 1 ]; then refresh_screen; else pause_enter; refresh_screen; fi
         ;;
       8)
+        refresh_screen
         step_uninstall
         invalidate_status
         if [ "$NO_CHANGE" -eq 1 ]; then refresh_screen; else pause_enter; refresh_screen; fi
