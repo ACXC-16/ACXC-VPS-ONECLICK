@@ -125,14 +125,16 @@ kv()    { printf '  %-18s %s\n' "$1" "$2"; }
 have()  { command -v "$1" >/dev/null 2>&1; }
 
 # 计算字符串在终端里占几列（中文等全角字符按 2 列算；用字节数换算，与 locale 无关）
+# 计算字符串在终端里占几列（用于把"项目 / 状态"两列对齐）
+# 纯 bash：函数内临时切到 C locale，用模式替换数出 ASCII 字节，再按 UTF-8 的
+# 3 字节 = 2 列折算中文/全角字符。不依赖本机 locale，也不起任何子进程。
 disp_width() {
-  local s="$1" total=0 ascii=0 nonascii=0
-  total="$(printf '%s' "$s" | LC_ALL=C wc -c | tr -d ' ')"
-  ascii="$(printf '%s' "$s" | LC_ALL=C tr -dc '\000-\177' | LC_ALL=C wc -c | tr -d ' ')"
-  case "$total" in ''|*[!0-9]*) total=0 ;; esac
-  case "$ascii" in ''|*[!0-9]*) ascii=0 ;; esac
-  nonascii=$((total - ascii))
-  printf '%s' $((ascii + (nonascii / 3) * 2))
+  local s="$1" save_lc="${LC_ALL-}" ascii="" n=0
+  LC_ALL=C
+  ascii="${s//[! -~]/}"                      # 只留下 ASCII 可打印字符（含空格）
+  n=$(( ${#ascii} + ((${#s} - ${#ascii}) / 3) * 2 ))
+  if [ -n "$save_lc" ]; then LC_ALL="$save_lc"; else unset LC_ALL; fi
+  printf '%s' "$n"
 }
 
 # 去掉字符串首尾空白
