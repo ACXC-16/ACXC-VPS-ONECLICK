@@ -1449,22 +1449,23 @@ EOF
 }
 # ============ 步骤 3：安装常用工具 / BBR网络加速 / Swap ===================
 # 顺序按「使用人数 + 重要性」排；多选时编号之间要用空格隔开
+# 每组格式：包名|说明|是否推荐（y = 直接回车时会装上，只标 3 个）
 TOOL_ITEMS=(
   "curl wget ca-certificates gnupg|基础组件（下载 / 证书 / 密钥）|y"
-  "htop tmux lsof|进程 / 会话 / 文件占用查看|y"
-  "vim nano|文本编辑器|y"
-  "git rsync unzip zip|同步 / 压缩打包|y"
   "fail2ban|fail2ban 防 SSH 暴力破解|y"
-  "bash-completion|命令自动补全（Tab 补全更好用）|y"
-  "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|y"
-  "timezone|设置时区（默认 Asia/Shanghai）|y"
   "swap|创建 Swap 交换文件|y"
-  "bbr|开启 BBR 网络加速|y"
+  "htop tmux lsof|进程 / 会话 / 文件占用查看|n"
+  "vim nano|文本编辑器|n"
+  "git rsync unzip zip|同步 / 压缩打包|n"
+  "bash-completion|命令自动补全（Tab 补全更好用）|n"
+  "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|n"
   "net-tools dnsutils mtr-tiny traceroute|网络诊断（排障用）|n"
+  "timezone|设置时区（默认 Asia/Shanghai）|n"
+  "bbr|开启 BBR 网络加速|n"
 )
 
 step_extras() {
-  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0 marker=""
+  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0
   local -a g_pkgs=() g_title=() g_rec=() g_label=()
   local entry pkgs="" title="" rec="" sel=""
 
@@ -1484,11 +1485,10 @@ step_extras() {
     printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
     for i in "${!g_title[@]}"; do
       if [ "${g_rec[$i]}" = y ]; then
-        marker="${C_GRN}推荐${C_RST}"
+        printf '  %s%2d)%s %s %s推荐%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "${C_GRN}" "${C_RST}"
       else
-        marker="${C_DIM}按需${C_RST}"
+        printf '  %s%2d)%s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_title[$i]}"
       fi
-      printf '  %s%2d)%s %s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "$marker"
     done
     printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
     printf '\n'

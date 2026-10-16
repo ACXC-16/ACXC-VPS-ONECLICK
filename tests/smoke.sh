@@ -307,14 +307,17 @@ rc="$(printf '3\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force -
 check "工具子选项退出码" "0" "$rc"
 check_has "列出了子选项" "$CUR_OUT" "基础组件（下载 / 证书 / 密钥）"
 check_has "标了推荐项" "$CUR_OUT" "推荐"
-check_has "标了按需项" "$CUR_OUT" "按需"
+check_hasnt "不再打印「按需」字样" "$CUR_OUT" "按需"
+# shellcheck disable=SC2016  # 这里的正则要用单引号，避免被 shell 展开
+nrec="$(grep -cE '[0-9]+[)] .*推荐' "$CUR_OUT")"
+if [ "$nrec" -eq 3 ]; then ok "推荐项正好 3 个"; else bad "推荐项应为 3 个，实际 ${nrec} 个"; fi
 check_has "只安装选中的一组" "$CUR_OUT" "install curl wget ca-certificates gnupg"
 check_hasnt "没有装没选的那些" "$CUR_OUT" "install vim nano"
 check_hasnt "没选 fail2ban 就不会装它" "$CUR_OUT" "install fail2ban"
 
 echo "== 19) 菜单 3 选 fail2ban：走它自己的安装配置流程 =="
 CUR_OUT="$WORK/tools-f2b.out"
-rc="$(printf '3\n5\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "选 fail2ban 退出码" "0" "$rc"
 check_has "开始安装 fail2ban" "$CUR_OUT" "安装配置 fail2ban…"
 check_has "子菜单会提示空格分隔" "$CUR_OUT" "多个编号之间要用空格隔开"
@@ -594,6 +597,7 @@ check_hasnt "退出时不打印汇总" "$CUR_OUT" "执行结果"
 echo "== 35) 界面留白：内容不贴屏幕顶边 =="
 STUBL="$WORK/lstub"
 mkdir -p "$STUBL"
+# shellcheck disable=SC2016  # 这两行是要写进桩脚本的字面量，故意用单引号
 printf '#!/bin/sh\necho "<<CLEAR>>"\n' >"$STUBL/clear"
 printf '#!/bin/sh\nif [ "$1" = "size" ]; then echo "40 100"; fi\n' >"$STUBL/stty"
 chmod +x "$STUBL/clear" "$STUBL/stty"
