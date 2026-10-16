@@ -116,12 +116,12 @@ _log_raw() {
   return 0
 }
 
-info()  { printf '%s\n' "${C_CYN}[信息]${C_RST} $*"; _log_raw INFO "$*"; }
-ok()    { printf '%s\n' "${C_GRN}[成功]${C_RST} $*"; _log_raw OK   "$*"; }
-warn()  { printf '%s\n' "${C_YEL}[注意]${C_RST} $*" >&2; _log_raw WARN "$*"; }
-err()   { printf '%s\n' "${C_RED}[错误]${C_RST} $*" >&2; _log_raw ERROR "$*"; }
+info()  { printf '%s\n' "  ${C_CYN}[信息]${C_RST} $*"; _log_raw INFO "$*"; }
+ok()    { printf '%s\n' "  ${C_GRN}[成功]${C_RST} $*"; _log_raw OK   "$*"; }
+warn()  { printf '%s\n' "  ${C_YEL}[注意]${C_RST} $*" >&2; _log_raw WARN "$*"; }
+err()   { printf '%s\n' "  ${C_RED}[错误]${C_RST} $*" >&2; _log_raw ERROR "$*"; }
 die()   { err "$*"; exit 1; }
-title() { printf '\n%s\n' "${C_BLD}${C_CYN}==== $* ====${C_RST}"; _log_raw TITLE "==== $* ===="; }
+title() { printf '\n%s\n' "  ${C_BLD}${C_CYN}==== $* ====${C_RST}"; _log_raw TITLE "==== $* ===="; }
 kv()    { printf '  %-18s %s\n' "$1" "$2"; }
 have()  { command -v "$1" >/dev/null 2>&1; }
 
@@ -2121,9 +2121,44 @@ show_status_table() {
 invalidate_status() { STATUS_TABLE_CACHE=""; return 0; }
 
 # 清屏并回到最上面（只在真正的终端里清，测试 / 管道下不做任何事）
+# 终端尺寸与留白：让界面落在屏幕中上部，不要贴着顶边
+TERM_LINES=24
+TERM_COLS=80
+TERM_SIZED=0
+
+detect_term_size() { # 只在真终端里量一次（一次 stty，开销可忽略）
+  local sz=""
+  [ "$TERM_SIZED" -eq 1 ] && return 0
+  [ "$TTY_OK" -eq 1 ] || return 0
+  TERM_SIZED=1
+  sz="$(stty size < /dev/tty 2>/dev/null)" || sz=""
+  case "$sz" in
+    [0-9]*' '[0-9]*)
+      TERM_LINES="${sz%% *}"
+      TERM_COLS="${sz##* }" ;;
+  esac
+  case "$TERM_LINES" in ''|*[!0-9]*) TERM_LINES=24 ;; esac
+  case "$TERM_COLS" in ''|*[!0-9]*) TERM_COLS=80 ;; esac
+  [ "$TERM_LINES" -lt 10 ] && TERM_LINES=24
+  return 0
+}
+
+# 顶部留白：屏幕越高留得越多（约让内容落在屏幕上部 1/3 处）
+screen_margin() {
+  local n=0 i=0
+  [ "$TTY_OK" -eq 1 ] || return 0
+  detect_term_size
+  n=$(( (TERM_LINES - 20) / 2 ))
+  [ "$n" -lt 1 ] && n=1
+  [ "$n" -gt 12 ] && n=12
+  for ((i = 0; i < n; i++)); do printf '\n'; done
+  return 0
+}
+
 refresh_screen() {
   if [ "$TTY_OK" -eq 1 ] && [ -n "${TERM:-}" ]; then
     clear 2>/dev/null || printf '\033[2J\033[H'
+    screen_margin
   fi
   return 0
 }
