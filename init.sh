@@ -2186,6 +2186,8 @@ menu_loop() {
 
     case "$choice" in
       0|q|Q|exit|quit)
+        # 退出时也清屏：让最后的汇总/提示出现在干净的屏幕上
+        refresh_screen
         break ;;
       1|2|3)
         n="$choice"
