@@ -80,6 +80,8 @@ SSH_M_PASSWORD_AUTH=""
 
 declare -a PLAN_SLUGS=() PLAN_TITLES=() PLAN_FUNCS=() PLAN_TOOLS=()
 declare -a RESULT_NAMES=() RESULT_STATES=()
+# 启动时的原始参数（重启脚本时原样带过去）
+declare -a ORIG_ARGS=()
 
 # ============================== 步骤注册表 ==================================
 # 格式: "标识|名称|默认值(y/n)|函数名"
@@ -1690,6 +1692,38 @@ plan_add() { # $1=步骤标识 → 追加到执行计划
 }
 
 # ============================== 重启服务 ====================================
+# 重启脚本本身：重新载入（更新过脚本后用它让新版立刻生效）
+restart_script() {
+  local src="${BASH_SOURCE[0]:-}" target="${CACHE_DIR}/acxc.sh"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] 将重新载入脚本：${src:-<stdin>}"
+    return 0
+  fi
+
+  # 正在运行的那个文件优先（从文件运行 / 通过 acxc 运行都属于这种）
+  if [ -n "$src" ] && [ -f "$src" ] && [ -r "$src" ]; then
+    info "重新载入脚本：$src"
+    printf '\n'
+    exec bash "$src" "${ORIG_ARGS[@]}"
+  fi
+  # curl | bash 这种没有文件的：用本地缓存（acxc 那份）
+  if [ -s "$target" ]; then
+    info "重新载入本地缓存：$target"
+    printf '\n'
+    exec bash "$target" "${ORIG_ARGS[@]}"
+  fi
+  # 都没有就先刷新缓存再重启
+  info "没有本地缓存，先拉一份最新版…"
+  install_shortcut quiet 2>/dev/null || true
+  if [ -s "$target" ]; then
+    printf '\n'
+    exec bash "$target" "${ORIG_ARGS[@]}"
+  fi
+  warn "无法重启脚本：找不到脚本文件，可以用 6) 更新脚本 先刷新本地缓存"
+  return 1
+}
+
 restart_service_now() { # $1=ssh|fail2ban
   case "$1" in
     ssh)
@@ -1714,6 +1748,7 @@ step_restart() {
     printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
     printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
     printf '  %s3)%s 全部重启（SSH + fail2ban）\n' "${C_GRN}" "${C_RST}"
+    printf '  %s4)%s 重启脚本（重新载入，刚更新过脚本就用它）\n' "${C_GRN}" "${C_RST}"
     printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
     printf '\n'
     info "重启 SSH 不会断开你已经登录的连接。"
@@ -1729,8 +1764,12 @@ step_restart() {
       3)
         if restart_service_now ssh; then SESSION_CHANGED=1; ok "SSH 服务已重启"; else rc=1; fi
         if restart_service_now fail2ban; then SESSION_CHANGED=1; ok "fail2ban 已重启"; else rc=1; fi ;;
+      4)
+        # 成功了就会 exec 重新载入，不会再走到下面
+        restart_script || rc=1
+        return "$rc" ;;
       *)
-        warn "无效的选择：$choice（请输入 0-3）"
+        warn "无效的选择：$choice（请输入 0-4）"
         continue ;;
     esac
     printf '\n'
@@ -2611,6 +2650,7 @@ steps_slugs() {
 }
 
 main() {
+  ORIG_ARGS=("$@")
   prepare_log
   parse_args "$@"
   init_colors
