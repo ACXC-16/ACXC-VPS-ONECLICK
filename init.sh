@@ -2325,6 +2325,8 @@ TERM_COLS=80
 TERM_SIZED=0
 # 是否清屏重画：1=清屏（默认）；设成 0 就全程不清屏，保留所有历史输出
 CLEAR_SCREEN="${ACXC_VPS_CLEAR_SCREEN:-1}"
+# 是否用"备用屏幕"：脚本的界面画在备用屏幕上，退出时终端自动还原成运行前的样子
+ALT_SCREEN=0
 
 detect_term_size() { # 只在真终端里量一次（优先用 bash 的 LINES/COLUMNS，其次 stty / tput）
   local sz="" t=""
@@ -2372,6 +2374,25 @@ screen_margin() {
   [ "$n" -lt 0 ] && n=0
   [ "$n" -gt 10 ] && n=10
   for ((i = 0; i < n; i++)); do printf '\n'; done
+  return 0
+}
+
+# 备用屏幕（alternate screen）：进入后脚本的画面上"另一块屏"，退出时终端还原，
+# 之前敲过的命令、跑过的输出都还在，脚本界面一点不留（和 vim / htop 一样的做法）。
+enter_fullscreen() {
+  [ "$TTY_OK" -eq 1 ] || return 0
+  [ -n "${TERM:-}" ] || return 0
+  [ "$ALT_SCREEN" -eq 1 ] && return 0
+  printf '\033[?1049h'
+  printf '\033[H'
+  ALT_SCREEN=1
+  return 0
+}
+
+leave_fullscreen() {
+  [ "$ALT_SCREEN" -eq 1 ] || return 0
+  ALT_SCREEN=0
+  printf '\033[?1049l'
   return 0
 }
 
@@ -2842,10 +2863,15 @@ main() {
   parse_args "$@"
   init_colors
   init_log "$@"
-  banner
   require_root
   detect_tty
   check_tty
+  # 交互式菜单整块画在"备用屏幕"上：退出时终端自动还原成运行前的样子，
+  # 脚本界面一点不留，只剩下你之前敲过的命令和输出
+  if [ -z "$ONLY_LIST" ] && [ -z "$SKIP_LIST" ] && [ "$ASSUME_YES" -eq 0 ]; then
+    enter_fullscreen
+  fi
+  banner
   check_os
   export DEBIAN_FRONTEND=noninteractive
   migrate_legacy_paths
@@ -2873,7 +2899,8 @@ main() {
   return 0
 }
 
-trap 'printf "\n"; err "已被中断（Ctrl+C）。已执行的步骤不会自动回滚。"; exit 130' INT
+trap 'leave_fullscreen; printf "\n"; err "已被中断（Ctrl+C）。已执行的步骤不会自动回滚。"; exit 130' INT TERM
+trap 'leave_fullscreen' EXIT
 
 main "$@"
 exit $?
