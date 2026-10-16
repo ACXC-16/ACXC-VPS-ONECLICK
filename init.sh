@@ -2307,6 +2307,8 @@ invalidate_status() { STATUS_TABLE_CACHE=""; return 0; }
 TERM_LINES=24
 TERM_COLS=80
 TERM_SIZED=0
+# 是否清屏重画：1=清屏（默认）；设成 0 就全程不清屏，保留所有历史输出
+CLEAR_SCREEN="${ACXC_VPS_CLEAR_SCREEN:-1}"
 
 detect_term_size() { # 只在真终端里量一次（优先用 bash 的 LINES/COLUMNS，其次 stty / tput）
   local sz="" t=""
@@ -2345,22 +2347,13 @@ detect_term_size() { # 只在真终端里量一次（优先用 bash 的 LINES/CO
 # 退场画面：清屏后留一点位置再打印一行淡淡的告别语，
 # 这样 shell 提示符不会孤零零贴在左上角（看起来像脚本正常工作结束）
 farewell_screen() {
-  local n=0 i=0
   [ "$TTY_OK" -eq 1 ] || return 0
-  detect_term_size
-  if [ "$TTY_OK" -eq 1 ] && [ -n "${TERM:-}" ]; then
-    clear 2>/dev/null || printf '\033[2J\033[H'
-  fi
-  n=$(( TERM_LINES / 4 ))
-  [ "$n" -lt 3 ] && n=3
-  [ "$n" -gt 8 ] && n=8
-  for ((i = 0; i < n; i++)); do printf '\n'; done
+  printf '\n'
   if [ -x "${SHORTCUT_DIR}/${SHORTCUT_NAME}" ]; then
     printf '  %s已退出 · 下次输入 %s 就能再打开%s\n' "${C_DIM}" "${SHORTCUT_NAME}" "${C_RST}"
   else
     printf '  %s已退出%s\n' "${C_DIM}" "${C_RST}"
   fi
-  printf '\n'
   return 0
 }
 
@@ -2376,6 +2369,7 @@ screen_margin() {
 }
 
 refresh_screen() {
+  [ "$CLEAR_SCREEN" -eq 1 ] || return 0
   if [ "$TTY_OK" -eq 1 ] && [ -n "${TERM:-}" ]; then
     clear 2>/dev/null || printf '\033[2J\033[H'
     screen_margin
@@ -2458,8 +2452,7 @@ menu_loop() {
 
     case "$choice" in
       0|q|Q|exit|quit)
-        # 退出时也清屏：让最后的汇总/提示出现在干净的屏幕上
-        refresh_screen
+        # 退出时不清屏：保留上面的历史（终端里之前的输出都还在，可以往上翻）
         break ;;
       1|2|3)
         n="$choice"
