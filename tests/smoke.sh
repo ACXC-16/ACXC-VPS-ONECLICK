@@ -613,6 +613,23 @@ else
   bad "清屏后没有留白（blank=${blank:-空}）"
 fi
 
+# 终端更高时留白应该更多（这里直接给 bash 的 LINES，模拟 44 行的窗口）
+CUR_OUT="$WORK/margin2.out"
+rc="$(printf '0\n' | LINES=44 COLUMNS=100 PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "44 行终端退出码" "0" "$rc"
+blank2="$(awk '/<<CLEAR>>/{seen=1; next} seen && /^ *$/{n++; next} seen{print n; exit}' "$CUR_OUT")"
+if [ -n "$blank2" ] && [ "$blank2" -ge 6 ]; then
+  ok "44 行终端留白 ${blank2} 行（比小屏更多）"
+else
+  bad "44 行终端留白不对（blank=${blank2:-空}）"
+fi
+
+# 空回车要有提示，不能静默重复提示符
+CUR_OUT="$WORK/empty-enter.out"
+rc="$(printf '\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "空回车退出码" "0" "$rc"
+check_has "空回车给出提示" "$CUR_OUT" "请输入要执行的项目编号"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
