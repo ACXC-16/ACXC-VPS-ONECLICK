@@ -2177,6 +2177,21 @@ status_label() { # $1=步骤标识 $2=完整名称
   esac
 }
 
+# 主菜单的大字标题（只拼一次，之后复用）
+SCRIPT_BANNER=""
+build_banner() {
+  [ -n "$SCRIPT_BANNER" ] && return 0
+  local nl=$'\n'
+  local art=""
+  art="${art}   █████   █████  ██   ██  █████     ██    █████ ${nl}"
+  art="${art}  ██   ██ ██       ██ ██  ██       ████   ██     ${nl}"
+  art="${art}  ███████ ██        ███   ██         ██   ██████ ${nl}"
+  art="${art}  ██   ██ ██       ██ ██  ██         ██   ██   ██${nl}"
+  art="${art}  ██   ██  █████  ██   ██  █████   ██████  █████ ${nl}"
+  SCRIPT_BANNER="${art}${nl}"
+  return 0
+}
+
 show_status_table() {
   local entry slug title def fn line="" out="" i=0 w=0 maxw=0 statw=30
   local -a labels=() statuses=() pads=()
@@ -2203,7 +2218,9 @@ show_status_table() {
     pads+=("$(printf '%s%*s' "$title" "$((maxw - $(disp_width "$title")))" "")")
   done
 
-  printf -v out '\n  %s  v%s\n\n' "${C_BLD}${C_CYN}${SCRIPT_NAME}${C_RST}" "$SCRIPT_VERSION"
+  build_banner
+  printf -v out '%s  %s  v%s\n\n' "${C_BLD}${C_CYN}${SCRIPT_BANNER}" "${SCRIPT_NAME}" "$SCRIPT_VERSION"
+  out="${out}${C_RST}"
   printf -v line '  %s%*s  %s\n' "项目" "$((maxw - 4))" "" "状态"
   out="${out}${line}"
   printf -v line '  %s  %s\n' "$(printf '─%.0s' $(seq 1 "$maxw"))" "$(printf '─%.0s' $(seq 1 "$statw"))"
@@ -2265,9 +2282,9 @@ screen_margin() {
   local n=0 i=0
   [ "$TTY_OK" -eq 1 ] || return 0
   detect_term_size
-  n=$(( (TERM_LINES - 20) / 2 ))
-  [ "$n" -lt 1 ] && n=1
-  [ "$n" -gt 12 ] && n=12
+  n=$(( (TERM_LINES - 26) / 2 ))
+  [ "$n" -lt 0 ] && n=0
+  [ "$n" -gt 10 ] && n=10
   for ((i = 0; i < n; i++)); do printf '\n'; done
   return 0
 }
