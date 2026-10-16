@@ -1873,8 +1873,8 @@ restart_service_now() { # $1=ssh|fail2ban
 
 step_restart() {
   local choice="" rc=0
+  screen_header "重启服务"
   while :; do
-    printf '\n%s\n' "  ${C_BLD}要重启哪些服务：${C_RST}"
     printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
     printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
     printf '  %s3)%s 全部重启（SSH + fail2ban + 脚本）\n' "${C_GRN}" "${C_RST}"
@@ -2103,8 +2103,9 @@ uninstall_all() {
 
 step_uninstall() {
   local choice=""
+  screen_header "卸载 / 清理"
   while :; do
-    printf '\n%s\n' "  ${C_BLD}卸载 / 清理（可以只做其中几项）：${C_RST}"
+    printf '%s\n' "  ${C_BLD}可以只做其中几项（选 0 返回主菜单）：${C_RST}"
     printf '  %s1)%s 删除快捷命令与脚本缓存（acxc）\n' "${C_GRN}" "${C_RST}"
     printf '  %s2)%s 卸载脚本装过的常用工具（含 CPU 微码）\n' "${C_GRN}" "${C_RST}"
     printf '  %s3)%s 删除运行日志\n' "${C_GRN}" "${C_RST}"
@@ -2247,21 +2248,30 @@ status_label() { # $1=步骤标识 $2=完整名称
   esac
 }
 
-# 主菜单的大字标题（只拼一次，之后复用）
+# 大字图标（ACXC，只拼一次，之后复用）
 SCRIPT_BANNER=""
 build_banner() {
   [ -n "$SCRIPT_BANNER" ] && return 0
   local nl=$'\n'
   local art=""
-  art="${art}   █████   █████  ██   ██  █████     ██    █████ ${nl}"
-  art="${art}  ██   ██ ██       ██ ██  ██       ████   ██     ${nl}"
-  art="${art}  ███████ ██        ███   ██         ██   ██████ ${nl}"
-  art="${art}  ██   ██ ██       ██ ██  ██         ██   ██   ██${nl}"
-  art="${art}  ██   ██  █████  ██   ██  █████   ██████  █████ ${nl}"
+  art="${art} █████   █████  ██   ██  █████ ${nl}"
+  art="${art}██   ██ ██       ██ ██  ██     ${nl}"
+  art="${art}███████ ██        ███   ██     ${nl}"
+  art="${art}██   ██ ██       ██ ██  ██     ${nl}"
+  art="${art}██   ██  █████  ██   ██  █████ ${nl}"
   SCRIPT_BANNER="${art}${nl}"
   return 0
 }
 
+# 每个"画面"（主菜单 / 二级菜单 / 步骤）顶部都先来一遍这个大图标 + 一行副标题
+screen_header() { # $1=副标题（可空）
+  build_banner
+  printf '%s' "${C_BLD}${C_CYN}${SCRIPT_BANNER}${C_RST}"
+  if [ -n "${1:-}" ]; then
+    printf '  %s\n\n' "${C_BLD}${1}${C_RST}"
+  fi
+  return 0
+}
 show_status_table() {
   local entry slug title def fn line="" out="" i=0 w=0 maxw=0 statw=30
   local -a labels=() statuses=() pads=()
@@ -2602,7 +2612,7 @@ confirm_plan() {
 run_plan() {
   local i=0 total=${#PLAN_SLUGS[@]} rc
   while [ "$i" -lt "$total" ]; do
-    title "步骤 $((i + 1))/${total}：${PLAN_TITLES[$i]}"
+    screen_header "步骤 $((i + 1))/${total}：${PLAN_TITLES[$i]}"
     _log_raw STEP "开始：${PLAN_TITLES[$i]}（${PLAN_SLUGS[$i]}）"
     rc=0
     "${PLAN_FUNCS[$i]}" || rc=$?

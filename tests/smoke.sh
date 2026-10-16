@@ -505,7 +505,7 @@ echo "== 31) 二级菜单做完动作后不再重复显示列表 =="
 CUR_OUT="$WORK/norepeat.out"
 rc="$(printf '7\n3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "重启流程退出码" "0" "$rc"
-n="$(grep -c '要重启哪些服务' "$CUR_OUT")"
+n="$(grep -c '重启 SSH 服务（sshd）' "$CUR_OUT")"
 check "子菜单只显示一次" "1" "$n"
 check_has "结果后回到主菜单" "$CUR_OUT" "操作菜单"
 
@@ -518,7 +518,7 @@ check "工具列表只显示一次" "1" "$n"
 CUR_OUT="$WORK/norepeat3.out"
 rc="$(printf '8\n3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "卸载流程退出码" "0" "$rc"
-n="$(grep -c '卸载 / 清理（可以只做其中几项）' "$CUR_OUT")"
+n="$(grep -c '可以只做其中几项' "$CUR_OUT")"
 check "卸载菜单只显示一次" "1" "$n"
 
 echo "== 32) 进二级菜单前会先清屏（屏幕上只留这一步）=="
@@ -546,9 +546,9 @@ esac
 CUR_OUT="$WORK/clear2.out"
 rc="$(printf '7\n0\n0\n' | PATH="$STUBT:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "重启菜单退出码" "0" "$rc"
-seq2="$(grep -oE '<<CLEAR>>|0\) 退出|要重启哪些服务' "$CUR_OUT" | tr '\n' '|')"
+seq2="$(grep -oE '<<CLEAR>>|0\) 退出|重启 SSH 服务' "$CUR_OUT" | tr '\n' '|')"
 case "$seq2" in
-  *"0) 退出|<<CLEAR>>|要重启哪些服务"*) ok "重启菜单同样先清屏" ;;
+  *"0) 退出|<<CLEAR>>|重启 SSH 服务"*) ok "重启菜单同样先清屏" ;;
   *) bad "重启菜单清屏顺序不对：$seq2" ;;
 esac
 
