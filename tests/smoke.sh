@@ -549,6 +549,26 @@ case "$seq2" in
   *) bad "重启菜单清屏顺序不对：$seq2" ;;
 esac
 
+echo "== 33) 输入 0 退出时也清屏 =="
+CUR_OUT="$WORK/clear3.out"
+rc="$(printf '0\n' | PATH="$STUBT:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+seq3="$(grep -oE '<<CLEAR>>|0\) 退出' "$CUR_OUT" | tr '\n' '|')"
+case "$seq3" in
+  *"0) 退出|<<CLEAR>>"*) ok "退出前清屏了" ;;
+  *) bad "退出时没有清屏：$seq3" ;;
+esac
+
+CUR_OUT="$WORK/clear4.out"
+rc="$(printf '2\n\n52052\n\n0\n' | PATH="$STUBT:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "改端口后退出，退出码" "0" "$rc"
+seq4="$(grep -oE '<<CLEAR>>|0\) 退出' "$CUR_OUT" | tr '\n' '|')"
+case "$seq4" in
+  *"0) 退出|<<CLEAR>>"*) ok "有改动时退出前也清屏" ;;
+  *) bad "有改动时退出没清屏：$seq4" ;;
+esac
+check_has "退出后仍然给出提示" "$CUR_OUT" "接下来请注意"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
