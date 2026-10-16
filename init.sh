@@ -1746,9 +1746,10 @@ shortcut_body() {
 URL="https://github.com/${REPO_SLUG}/releases/latest/download/init.sh"
 CACHE="${CACHE_DIR}/acxc.sh"
 
-# 有本地缓存就直接用（秒开），只有缓存超过 12 小时才在后台悄悄更新
+# 有本地缓存就直接用（秒开）；只要缓存超过 1 小时，就在后台悄悄拉最新版，
+# 这样下次打开就是新版，又不会拖慢这次启动。
 if [ -s "\$CACHE" ]; then
-  if [ -n "\$(find "\$CACHE" -mmin +720 2>/dev/null)" ] && command -v curl >/dev/null 2>&1; then
+  if [ -n "\$(find "\$CACHE" -mmin +60 2>/dev/null)" ] && command -v curl >/dev/null 2>&1; then
     ( curl -fsSL "\$URL" -o "\$CACHE.tmp" 2>/dev/null && mv "\$CACHE.tmp" "\$CACHE" ) >/dev/null 2>&1 &
   fi
   exec bash "\$CACHE" "\$@"
@@ -1762,6 +1763,7 @@ fi
 exec bash "\$CACHE" "\$@"
 EOF
 }
+
 install_shortcut() { # $1=quiet：自动安装时用，没变化就完全不说话
   local quiet="${1:-}" target="${SHORTCUT_DIR}/${SHORTCUT_NAME}" tmp="" changed=0 src=""
   if [ "$DRY_RUN" -eq 1 ] && [ -z "${ACXC_VPS_SHORTCUT_DIR:-}" ]; then
@@ -2848,6 +2850,10 @@ main() {
   export DEBIAN_FRONTEND=noninteractive
   migrate_legacy_paths
   ssh_load_managed
+  # 如果这次跑的是放了很久的本地缓存版，提醒一句（避免用着旧版还以为是最新）
+  if [ -f "${CACHE_DIR}/acxc.sh" ] && [ -n "$(find "${CACHE_DIR}/acxc.sh" -mmin +1440 2>/dev/null)" ]; then
+    warn "这份可能是旧版缓存（超过 1 天没更新）；菜单 6) 更新脚本 可立刻刷新"
+  fi
   # 自动装好快捷命令（下次直接输 acxc 就能打开；内容没变则静默跳过）
   install_shortcut quiet 2>/dev/null || true
 

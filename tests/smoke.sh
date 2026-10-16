@@ -700,6 +700,15 @@ check "全部重启退出码" "0" "$rc"
 check_has "提示接着重启脚本" "$CUR_OUT" "接着重启脚本"
 check_has "会重新载入脚本" "$CUR_OUT" "将重新载入脚本"
 
+echo "== 40) 时区提示词必须是新版（带「编号或名称」），避免跑到旧版还以为有 bug =="
+# 提示词由 read -p 打印，只在真终端可见，所以这里直接查源码
+check_has "源码里是新版时区提示词" "$ROOT/init.sh" "请输入时区（编号或名称）"
+check_hasnt "源码里没有旧版提示词" "$ROOT/init.sh" 'ask_value "请输入时区" "Asia/Shanghai"'
+
+echo "== 41) acxc 快捷命令：缓存超过 1 小时就在后台刷新 =="
+check_has "包装脚本用 1 小时阈值" "$SCDIR/acxc" "mmin +60"
+check_has "包装脚本仍优先用缓存秒开" "$SCDIR/acxc" "exec bash \"\$CACHE\""
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
