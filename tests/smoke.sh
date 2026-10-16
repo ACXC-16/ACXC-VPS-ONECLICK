@@ -696,8 +696,8 @@ check_has "选 0 保持原样" "$CUR_OUT" "保持当前时区"
 
 echo "== 39) 全部重启 = SSH + fail2ban + 脚本（会重新载入）=="
 CUR_OUT="$WORK/restart-all.out"
-rc="$(printf '7\n3\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
-check "全部重启退出码" "0" "$rc"
+rc="$(printf '7\n4\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "全部重启（第 4 项）退出码" "0" "$rc"
 check_has "提示接着重启脚本" "$CUR_OUT" "接着重启脚本"
 check_has "会重新载入脚本" "$CUR_OUT" "将重新载入脚本"
 
