@@ -676,6 +676,24 @@ rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sy
 check "无人值守退出码" "0" "$rc"
 check_hasnt "管道运行时不打印告别语" "$CUR_OUT" "已退出"
 
+echo "== 38) 时区选择：列出常用时区，支持编号 / 名称 / 0 不改 =="
+CUR_OUT="$WORK/tz.out"
+rc="$(printf '3\n11\n4\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "时区流程退出码" "0" "$rc"
+check_has "列出了常用时区" "$CUR_OUT" "常用时区"
+check_has "有上海（默认）" "$CUR_OUT" "Asia/Shanghai"
+check_has "有东京" "$CUR_OUT" "Asia/Tokyo"
+check_has "有伦敦" "$CUR_OUT" "Europe/London"
+check_has "有纽约" "$CUR_OUT" "America/New_York"
+check_has "有 UTC" "$CUR_OUT" "UTC"
+check_has "有 0 = 不改" "$CUR_OUT" "保持当前时区（不改）"
+check_has "编号 4 映射成东京" "$CUR_OUT" "已选择：Asia/Tokyo"
+
+CUR_OUT="$WORK/tz0.out"
+rc="$(printf '3\n11\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "选 0 退出码" "0" "$rc"
+check_has "选 0 保持原样" "$CUR_OUT" "保持当前时区"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
