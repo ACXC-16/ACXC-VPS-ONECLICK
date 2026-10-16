@@ -591,6 +591,23 @@ if [ "$nb" -ge 2 ]; then ok "确实重新启动了一个新实例（横幅出现
 check_has "重启后菜单正常" "$CUR_OUT" "0) 退出"
 check_hasnt "退出时不打印汇总" "$CUR_OUT" "执行结果"
 
+echo "== 35) 界面留白：内容不贴屏幕顶边 =="
+STUBL="$WORK/lstub"
+mkdir -p "$STUBL"
+printf '#!/bin/sh\necho "<<CLEAR>>"\n' >"$STUBL/clear"
+printf '#!/bin/sh\nif [ "$1" = "size" ]; then echo "40 100"; fi\n' >"$STUBL/stty"
+chmod +x "$STUBL/clear" "$STUBL/stty"
+CUR_OUT="$WORK/margin.out"
+rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+# 清屏之后、标题之前应当有若干空行
+blank="$(awk '/<<CLEAR>>/{seen=1; next} seen && /^ *$/{n++; next} seen{print n; exit}' "$CUR_OUT")"
+if [ -n "$blank" ] && [ "$blank" -ge 1 ]; then
+  ok "清屏后有 ${blank} 行顶部留白"
+else
+  bad "清屏后没有留白（blank=${blank:-空}）"
+fi
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
