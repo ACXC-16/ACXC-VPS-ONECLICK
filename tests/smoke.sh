@@ -569,6 +569,30 @@ case "$seq4" in
 esac
 check_has "退出后仍然给出提示" "$CUR_OUT" "接下来请注意"
 
+echo "== 34) 重启脚本：真的会重新载入并重画菜单 =="
+# 造一份"非 root 也能跑（非 dry-run）"的副本，用来验证 exec 重新载入
+sed -e 's|^  err "本脚本需要 root 权限。"$|  return 0|' \
+    -e 's|^check_tty() {$|check_tty() { return 0;|' \
+    -e "s|/etc/ssh/sshd_config\.d|${FAKE}/sshd_config.d|g" \
+    -e "s|/etc/ssh/sshd_config|${FAKE}/sshd_config|g" \
+    -e 's|/root/acxc-vps-backup|'"$WORK"'/bk|g' \
+    -e 's|/var/run/reboot-required|'"$WORK"'/reboot-required|g' \
+    "$ROOT/init.sh" >"$WORK/init-exec.sh"
+SCDIR3="$WORK/bin-exec"; CACHE3="$WORK/cache-exec"
+mkdir -p "$SCDIR3" "$CACHE3"
+CUR_OUT="$WORK/exec.out"
+printf '7\n4\n0\n' | ACXC_VPS_SHORTCUT_DIR="$SCDIR3" ACXC_VPS_CACHE_DIR="$CACHE3" \
+  ACXC_VPS_LOG="$WORK/exec.log" ACXC_VPS_FORCE_STDIN=1 \
+  bash "$WORK/init-exec.sh" --force >"$CUR_OUT" 2>&1
+rc=$?
+check "重启脚本退出码" "0" "$rc"
+check_has "提示正在重新载入" "$CUR_OUT" "重新载入脚本"
+n="$(grep -c '操作菜单' "$CUR_OUT")"
+if [ "$n" -ge 2 ]; then ok "重新载入后重新画了菜单（出现 ${n} 次）"; else bad "重新载入后没有重画菜单（只出现 ${n} 次）"; fi
+nb="$(grep -c 'ACXC16-VPS新机一键脚本 v1.0.0  ——' "$CUR_OUT")"
+if [ "$nb" -ge 2 ]; then ok "确实重新启动了一个新实例（横幅出现 ${nb} 次）"; else bad "没有真正重新启动（横幅只出现 ${nb} 次）"; fi
+check_has "重启后菜单正常" "$CUR_OUT" "0) 退出"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
