@@ -1308,6 +1308,78 @@ EOF
 }
 
 # ============================== 步骤 5：时区/Swap/BBR =======================
+# ==================== UFW 防火墙 ===========================================
+# 顺序很重要：先放行 SSH 端口 → 再启用；否则会把自己关在门外。
+install_ufw() {
+  local ports="" p="" rc=0
+
+  if have ufw; then
+    info "ufw 已经安装"
+  else
+    info "安装 ufw…"
+    if ! run env DEBIAN_FRONTEND=noninteractive apt-get -y install ufw; then
+      warn "ufw 安装失败，已跳过"
+      return 1
+    fi
+    ok "ufw 已安装"
+  fi
+
+  # 当前生效的 SSH 端口（含过渡期保留的旧端口）
+  ports="$(trim "$(current_ssh_ports)")"
+  [ -n "$ports" ] || ports="$(trim "$SSH_M_PORTS")"
+  if [ -z "$ports" ]; then
+    warn "读不到 SSH 端口，为避免被关在门外，已跳过启用（可以先跑第 2 项确认端口）"
+    return 1
+  fi
+  info "先放行 SSH 端口，再启用防火墙：$(trim "$ports" | tr -s ' ')"
+
+  for p in $ports; do
+    if run ufw allow "${p}/tcp" 2>/dev/null; then
+      ok "已放行 ${p}/tcp"
+    else
+      warn "放行 ${p}/tcp 失败"
+      rc=1
+    fi
+  done
+
+  if ask_yn "是否同时放行网站常用端口 80 / 443？" n; then
+    run ufw allow 80/tcp 2>/dev/null && ok "已放行 80/tcp"
+    run ufw allow 443/tcp 2>/dev/null && ok "已放行 443/tcp"
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '\n'
+    warn "启用后默认拒绝所有入站连接，只放行上面列出的端口。"
+    warn "万一连不上：用云控制台 VNC 登录后执行 ufw disable"
+    info "[dry-run] 将执行：ufw --force enable"
+    return 0
+  fi
+
+  if ufw status 2>/dev/null | grep -q "^Status: active"; then
+    ok "ufw 已经在运行（规则已更新）"
+  else
+    printf '\n'
+    warn "启用后默认拒绝所有入站连接，只放行上面列出的端口。"
+    warn "如果还有别的服务要对外开放（数据库 / 面板等），启用后请立刻执行：ufw allow <端口>/tcp"
+    if ! ask_yn "确认现在启用 ufw？" y; then
+      info "已跳过启用；规则已经准备好，随时可以执行 ufw enable"
+      return "$rc"
+    fi
+    if run ufw --force enable; then
+      ok "ufw 已启用"
+    else
+      err "ufw 启用失败"
+      return 1
+    fi
+  fi
+
+  printf '\n'
+  info "当前 ufw 规则："
+  ufw status numbered 2>/dev/null | sed 's/^/    /' || true
+  warn "万一连不上：用云控制台 VNC 登录后执行 ufw disable"
+  return "$rc"
+}
+
 create_swap() {
   local mb="$1" avail_mb=""
   if [ "$mb" -lt 256 ]; then
@@ -1454,6 +1526,7 @@ TOOL_ITEMS=(
   "curl wget ca-certificates gnupg|基础组件（下载 / 证书 / 密钥）|y"
   "fail2ban|fail2ban 防 SSH 暴力破解|y"
   "swap|创建 Swap 交换文件|y"
+  "ufw|安装 UFW 防火墙（自动先放行 SSH 端口）|n"
   "htop tmux lsof|进程 / 会话 / 文件占用查看|n"
   "vim nano|文本编辑器|n"
   "git rsync unzip zip|同步 / 压缩打包|n"
@@ -1552,6 +1625,9 @@ step_extras() {
           continue ;;
         swap)
           setup_swap || rcp=1
+          continue ;;
+        ufw)
+          install_ufw || rcp=1
           continue ;;
         bbr)
           enable_bbr || rcp=1
@@ -1910,6 +1986,18 @@ uninstall_configs() {
     fi
   fi
 
+  # UFW：先关防火墙再卸载，避免清到一半把自己关在门外
+  if have ufw; then
+    if [ "$DRY_RUN" -eq 0 ] && ufw status 2>/dev/null | grep -q "^Status: active"; then
+      if ask_yn "关闭 UFW 防火墙（ufw disable）？" y; then
+        run ufw --force disable && ok "ufw 已关闭"
+      fi
+    fi
+    if ask_yn "是否卸载 ufw 软件包？" n; then
+      run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge ufw && ok "已卸载 ufw"
+    fi
+  fi
+
   # Swap
   if [ -f "$SWAPFILE" ]; then
     if ask_yn "关闭并删除 Swap 交换文件（${SWAPFILE}）？" y; then
@@ -1950,7 +2038,7 @@ step_uninstall() {
     printf '  %s1)%s 删除快捷命令与脚本缓存（acxc）\n' "${C_GRN}" "${C_RST}"
     printf '  %s2)%s 卸载脚本装过的常用工具（含 CPU 微码）\n' "${C_GRN}" "${C_RST}"
     printf '  %s3)%s 删除运行日志\n' "${C_GRN}" "${C_RST}"
-    printf '  %s4)%s 还原 SSH / 删除 fail2ban、BBR、Swap 配置\n' "${C_GRN}" "${C_RST}"
+    printf '  %s4)%s 还原 SSH / 删除 fail2ban、ufw、BBR、Swap 配置\n' "${C_GRN}" "${C_RST}"
     printf '  %s5)%s 完全卸载（1-4 全做，并可选删除备份）\n' "${C_YEL}" "${C_RST}"
     printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
     printf '\n'
@@ -2040,6 +2128,15 @@ status_extras() {
     fi
   else
     out="${out} · fail2ban 未装"
+  fi
+  if have ufw; then
+    if have systemctl && systemctl is-active ufw >/dev/null 2>&1; then
+      out="${out} · ufw 开"
+    elif [ "$DRY_RUN" -eq 0 ] && ufw status 2>/dev/null | grep -q "^Status: active"; then
+      out="${out} · ufw 开"
+    else
+      out="${out} · ufw 关"
+    fi
   fi
   sw="$(swap_total_mb)"
   if [ "$sw" -gt 0 ]; then
