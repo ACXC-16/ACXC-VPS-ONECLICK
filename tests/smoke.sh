@@ -445,7 +445,7 @@ CUR_OUT="$WORK/restart.out"
 rc="$(printf '7\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
 check_has "有重启 SSH 选项" "$CUR_OUT" "重启 SSH 服务"
-check_has "有全部重启选项" "$CUR_OUT" "全部重启（SSH + fail2ban）"
+check_has "有全部重启选项" "$CUR_OUT" "全部重启（SSH + fail2ban + 脚本）"
 check_hasnt "选 0 不多要一次回车" "$CUR_OUT" "（按回车继续）"
 
 echo "== 28) 卸载子菜单：删除快捷命令 / 删除日志 =="
@@ -692,6 +692,13 @@ CUR_OUT="$WORK/tz0.out"
 rc="$(printf '3\n11\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "选 0 退出码" "0" "$rc"
 check_has "选 0 保持原样" "$CUR_OUT" "保持当前时区"
+
+echo "== 39) 全部重启 = SSH + fail2ban + 脚本（会重新载入）=="
+CUR_OUT="$WORK/restart-all.out"
+rc="$(printf '7\n3\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "全部重启退出码" "0" "$rc"
+check_has "提示接着重启脚本" "$CUR_OUT" "接着重启脚本"
+check_has "会重新载入脚本" "$CUR_OUT" "将重新载入脚本"
 
 echo
 if [ "$FAIL" -gt 0 ]; then

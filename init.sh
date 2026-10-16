@@ -1875,7 +1875,7 @@ step_restart() {
     printf '\n%s\n' "  ${C_BLD}要重启哪些服务：${C_RST}"
     printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
     printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
-    printf '  %s3)%s 全部重启（SSH + fail2ban）\n' "${C_GRN}" "${C_RST}"
+    printf '  %s3)%s 全部重启（SSH + fail2ban + 脚本）\n' "${C_GRN}" "${C_RST}"
     printf '  %s4)%s 重启脚本（重新载入，刚更新过脚本就用它）\n' "${C_GRN}" "${C_RST}"
     printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
     printf '\n'
@@ -1891,7 +1891,11 @@ step_restart() {
         if restart_service_now fail2ban; then ok "fail2ban 已重启"; else rc=1; fi ;;
       3)
         if restart_service_now ssh; then ok "SSH 服务已重启"; else rc=1; fi
-        if restart_service_now fail2ban; then ok "fail2ban 已重启"; else rc=1; fi ;;
+        if restart_service_now fail2ban; then ok "fail2ban 已重启"; else rc=1; fi
+        # 全部重启也包含脚本本身：放在最后，重新载入后本次运行就结束了
+        info "接着重启脚本（重新载入）…"
+        restart_script || rc=1
+        return "$rc" ;;
       4)
         # 成功了就会 exec 重新载入，不会再走到下面
         restart_script || rc=1
