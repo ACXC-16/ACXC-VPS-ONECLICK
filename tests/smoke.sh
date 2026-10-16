@@ -518,6 +518,37 @@ check "卸载流程退出码" "0" "$rc"
 n="$(grep -c '卸载 / 清理（可以只做其中几项）' "$CUR_OUT")"
 check "卸载菜单只显示一次" "1" "$n"
 
+echo "== 32) 进二级菜单前会先清屏（屏幕上只留这一步）=="
+STUBT="$WORK/tstub"
+mkdir -p "$STUBT"
+printf '#!/bin/sh\necho "<<CLEAR>>"\n' >"$STUBT/clear"
+chmod +x "$STUBT/clear"
+# 强制走"有终端"分支（这样才能触发 clear），同时让读取仍然走 stdin
+sed -e 's/^  TTY_OK=0$/  TTY_OK=1/' \
+    -e 's| < /dev/tty| |g' \
+    -e "s|/etc/ssh/sshd_config\.d|${FAKE}/sshd_config.d|g" \
+    -e "s|/etc/ssh/sshd_config|${FAKE}/sshd_config|g" \
+    "$ROOT/init.sh" >"$WORK/init-tty.sh"
+CUR_OUT="$WORK/clear.out"
+rc="$(printf '3\n0\n0\n' | PATH="$STUBT:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+check_has "清屏被调用过" "$CUR_OUT" "<<CLEAR>>"
+# 断言顺序模式：主菜单 → 清屏 → 二级菜单
+seq_str="$(grep -oE '<<CLEAR>>|0\) 退出|可安装 / 可设置的项目' "$CUR_OUT" | tr '\n' '|')"
+case "$seq_str" in
+  *"0) 退出|<<CLEAR>>|可安装 / 可设置的项目"*) ok "顺序正确：主菜单 → 清屏 → 二级菜单" ;;
+  *) bad "清屏顺序不对：$seq_str" ;;
+esac
+
+CUR_OUT="$WORK/clear2.out"
+rc="$(printf '7\n0\n0\n' | PATH="$STUBT:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+check "重启菜单退出码" "0" "$rc"
+seq2="$(grep -oE '<<CLEAR>>|0\) 退出|要重启哪些服务' "$CUR_OUT" | tr '\n' '|')"
+case "$seq2" in
+  *"0) 退出|<<CLEAR>>|要重启哪些服务"*) ok "重启菜单同样先清屏" ;;
+  *) bad "重启菜单清屏顺序不对：$seq2" ;;
+esac
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
