@@ -1670,62 +1670,72 @@ step_extras() {
     g_label+=("$(printf '%s%*s' "${g_title[$i]}" "$pad" "")")
   done
 
-  printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
-  for i in "${!g_title[@]}"; do
-    if [ "${g_rec[$i]}" = y ]; then
-      printf '  %s%2d)%s %s %s推荐%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "${C_GRN}" "${C_RST}"
-    else
-      printf '  %s%2d)%s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_title[$i]}"
-    fi
-  done
-  printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
-  printf '\n'
-  info "多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部"
+  # 外层循环：只选一项时，处理完回到本菜单；选两项以上或 a（全部）处理完回上级菜单
   while :; do
+    printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
+    for i in "${!g_title[@]}"; do
+      if [ "${g_rec[$i]}" = y ]; then
+        printf '  %s%2d)%s %s %s推荐%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "${C_GRN}" "${C_RST}"
+      else
+        printf '  %s%2d)%s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_title[$i]}"
+      fi
+    done
+    printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
+    printf '\n'
+    info "多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部"
 
-    if [ "$ASSUME_YES" -eq 1 ]; then
-      PLAN_TOOLS=()
-      for i in "${!g_pkgs[@]}"; do
-        [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
-      done
-      raw=""
-    else
-      if ! read_line "请选择"; then return 1; fi
-      raw="${REPLY}"
+    rcp=0
+    # 内层只看输入：输错就地重问，不重画列表
+    while :; do
+      if [ "$ASSUME_YES" -eq 1 ]; then
+        PLAN_TOOLS=()
+        for i in "${!g_pkgs[@]}"; do
+          [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
+        done
+        raw=""
+      else
+        if ! read_line "请选择"; then return 1; fi
+        raw="${REPLY}"
+      fi
+
+      if [ -z "$(trim "$raw")" ]; then
+        PLAN_TOOLS=()
+        for i in "${!g_pkgs[@]}"; do
+          [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
+        done
+      else
+        line="$(trim "$(menu_clean_input "$raw")")"
+        case "$line" in
+          0|q|Q) mark_no_change; return 0 ;;
+          a|A|all|ALL)
+            PLAN_TOOLS=()
+            for i in "${!g_pkgs[@]}"; do plan_tool_add "$i"; done ;;
+          *)
+            PLAN_TOOLS=()
+            ok=1
+            # shellcheck disable=SC2086
+            for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
+              [ -n "$tok" ] || continue
+              case "$tok" in
+                *[!0-9]*) ok=0; break ;;
+              esac
+              if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#g_pkgs[@]}" ]; then ok=0; break; fi
+              plan_tool_add "$((10#$tok - 1))"
+            done
+            if [ "$ok" -ne 1 ] || [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
+              warn "编号不对：请输入 1-${#g_pkgs[@]}，多个编号之间用空格隔开（例如：1 3）"
+              continue
+            fi ;;
+        esac
+      fi
+      break
+    done
+
+    if [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
+      info "没有选择任何项目。"
+      refresh_screen
+      continue
     fi
-
-    if [ -z "$(trim "$raw")" ]; then
-      PLAN_TOOLS=()
-      for i in "${!g_pkgs[@]}"; do
-        [ "${g_rec[$i]}" = y ] && plan_tool_add "$i"
-      done
-    else
-      line="$(trim "$(menu_clean_input "$raw")")"
-      case "$line" in
-        0|q|Q) mark_no_change; return 0 ;;
-        a|A|all|ALL)
-          PLAN_TOOLS=()
-          for i in "${!g_pkgs[@]}"; do plan_tool_add "$i"; done ;;
-        *)
-          PLAN_TOOLS=()
-          ok=1
-          # shellcheck disable=SC2086
-          for tok in $(printf '%s' "$line" | tr ' ' '\n'); do
-            [ -n "$tok" ] || continue
-            case "$tok" in
-              *[!0-9]*) ok=0; break ;;
-            esac
-            if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#g_pkgs[@]}" ]; then ok=0; break; fi
-            plan_tool_add "$((10#$tok - 1))"
-          done
-          if [ "$ok" -ne 1 ] || [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
-            warn "编号不对：请输入 1-${#g_pkgs[@]}，多个编号之间用空格隔开（例如：1 3）"
-            continue
-          fi ;;
-      esac
-    fi
-
-    [ "${#PLAN_TOOLS[@]}" -eq 0 ] && continue
 
     printf '\n'
     for i in "${PLAN_TOOLS[@]}"; do
@@ -1768,6 +1778,12 @@ step_extras() {
       ok "选中的项目都处理完了。"
     else
       warn "有部分项目没装上，可稍后重试。"
+    fi
+
+    # 只选了一项：回到本菜单继续选；选多项 / a / 无人值守：回上级菜单
+    if [ "$ASSUME_YES" -eq 0 ] && [ "${#PLAN_TOOLS[@]}" -eq 1 ]; then
+      refresh_screen
+      continue
     fi
     return "$rcp"
   done
