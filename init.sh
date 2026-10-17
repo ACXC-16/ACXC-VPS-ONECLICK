@@ -2353,6 +2353,7 @@ TERM_SIZED=0
 CLEAR_SCREEN="${ACXC_VPS_CLEAR_SCREEN:-1}"
 # 是否用"备用屏幕"：脚本的界面画在备用屏幕上，退出时终端自动还原成运行前的样子
 ALT_SCREEN=0
+START_ROW=""
 
 detect_term_size() { # 只在真终端里量一次（优先用 bash 的 LINES/COLUMNS，其次 stty / tput）
   local sz="" t=""
@@ -2405,12 +2406,29 @@ screen_margin() {
 
 # 备用屏幕（alternate screen）：进入后脚本的画面上"另一块屏"，退出时终端还原，
 # 之前敲过的命令、跑过的输出都还在，脚本界面一点不留（和 vim / htop 一样的做法）。
+# 问终端"光标现在在第几行"（DSR）。拿到行号才启用备用屏幕，拿不到就不启用，
+# 这样在实现不完整的终端上也不会把提示符扔到屏幕中间（宁可不用备用屏幕）。
+detect_start_row() {
+  local reply="" row=""
+  if [ -n "${ACXC_VPS_START_ROW:-}" ]; then
+    printf '%s' "$ACXC_VPS_START_ROW"
+    return 0
+  fi
+  [ "$TTY_OK" -eq 1 ] || return 0
+  printf '\033[6n' >/dev/tty 2>/dev/null || return 0
+  # shellcheck disable=SC2016,SC2034  # -d 的结束符就是要大写的 R（DSR 回复以 R 结尾）
+  IFS= read -r -t 1 -d "R" reply </dev/tty 2>/dev/null || true
+  reply="${reply##*\[}"
+  row="${reply%%;*}"
+  case "$row" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$row" -ge 1 ] || return 0
+  printf '%s' "$row"
+}
+
 enter_fullscreen() {
   [ "$TTY_OK" -eq 1 ] || return 0
   [ -n "${TERM:-}" ] || return 0
   [ "$ALT_SCREEN" -eq 1 ] && return 0
-  # 自己记下光标位置：有些终端（如 FinalShell）切备用屏幕后不会把光标放回原处，
-  # 不显式保存的话，退出时 shell 提示符会跑到屏幕中间的空白处。
   printf '\033[s'
   printf '\033[?1049h'
   printf '\033[H'
@@ -2423,8 +2441,12 @@ leave_fullscreen() {
   ALT_SCREEN=0
   printf '\033[?1049l'
   printf '\033[0m'
-  # 回到进入脚本前的那一行，提示符就紧跟在 acxc 命令下面
-  printf '\033[u'
+  # 有些终端（如 FinalShell）还原屏幕后不会还原光标行，这里手动把光标放回
+  # 进入脚本前的那一行（即 acxc 命令下面那行），提示符就不会跑到屏幕中间。
+  if [ -n "${START_ROW:-}" ]; then
+    printf '\033[%s;1H' "$START_ROW"
+    printf '\033[K'
+  fi
   return 0
 }
 
@@ -2909,7 +2931,9 @@ main() {
   # 交互式菜单整块画在"备用屏幕"上：退出时终端自动还原成运行前的样子，
   # 脚本界面一点不留，只剩下你之前敲过的命令和输出
   if [ -z "$ONLY_LIST" ] && [ -z "$SKIP_LIST" ] && [ "$ASSUME_YES" -eq 0 ]; then
-    enter_fullscreen
+    START_ROW="$(detect_start_row)"
+    # 拿不到光标行号就不进备用屏幕：宁可少点特效，也不能让提示符乱跑
+    [ -n "$START_ROW" ] && enter_fullscreen
   fi
   banner
   check_os
