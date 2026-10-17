@@ -315,7 +315,7 @@ check_hasnt "没把 Ubuntu 的 VERSION 当成脚本版本" "$CUR_OUT" "Noble Num
 
 echo "== 18) 菜单 3 = 工具子选项：只装选中的那一组 =="
 CUR_OUT="$WORK/tools.out"
-rc="$(printf '3\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n1\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "工具子选项退出码" "0" "$rc"
 check_has "列出了子选项" "$CUR_OUT" "下载与证书"
 check_has "标了推荐项" "$CUR_OUT" "推荐"
@@ -330,9 +330,9 @@ check_hasnt "没选 fail2ban 就不会装它" "$CUR_OUT" "install fail2ban"
 
 echo "== 19) 菜单 3 选 fail2ban：走它自己的安装配置流程 =="
 CUR_OUT="$WORK/tools-f2b.out"
-rc="$(printf '3\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n2\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "选 fail2ban 退出码" "0" "$rc"
-check_has "开始安装 fail2ban" "$CUR_OUT" "安装配置 fail2ban…"
+check_has "开始安装 fail2ban" "$CUR_OUT" "安装 fail2ban…"
 check_has "子菜单会提示空格分隔" "$CUR_OUT" "多个编号之间要用空格隔开"
 
 echo "== 20) 快捷命令 acxc：脚本启动时自动安装 =="
@@ -520,7 +520,7 @@ check "子菜单只显示一次" "1" "$n"
 check_has "结果后回到主菜单" "$CUR_OUT" "操作菜单"
 
 CUR_OUT="$WORK/norepeat2.out"
-rc="$(printf '3\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n1\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "工具单选退出码" "0" "$rc"
 n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
 check "只选一项：装完回到本菜单（列表 2 次）" "2" "$n"
@@ -658,7 +658,7 @@ check_has "空回车给出提示" "$CUR_OUT" "请输入要执行的项目编号"
 
 echo "== 36) 工具菜单 4 = 安装 UFW：必须先放行 SSH 再启用 =="
 CUR_OUT="$WORK/ufw.out"
-rc="$(printf '3\n4\nn\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n4\n1\nn\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "UFW 流程退出码" "0" "$rc"
 if grep -qF 'apt-get -y install ufw' "$CUR_OUT" || grep -qF 'ufw 已经安装' "$CUR_OUT"; then
   ok "进入了 UFW 安装 / 检查流程"
@@ -824,6 +824,54 @@ if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
 else
   ok "非 Linux 环境，跳过权限检查"
 fi
+
+echo "== 47) 工具项支持关闭 / 卸载 / 端口管理 =="
+# 普通软件包：卸载
+CUR_OUT="$WORK/ti-rm.out"
+rc="$(printf '3\n7\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "卸载软件包退出码" "0" "$rc"
+check_has "走卸载命令" "$CUR_OUT" "apt-get -y remove --purge git rsync unzip zip"
+check_has "卸载有结果提示" "$CUR_OUT" "已卸载：传文件 / 解压"
+
+# fail2ban：停止并禁用
+CUR_OUT="$WORK/ti-f2b-off.out"
+rc="$(printf '3\n2\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "停用 fail2ban 退出码" "0" "$rc"
+check_has "会停掉 fail2ban" "$CUR_OUT" "systemctl stop fail2ban"
+check_has "停用提示" "$CUR_OUT" "已停止并禁用"
+
+# Swap：关闭并删除
+CUR_OUT="$WORK/ti-swap-off.out"
+rc="$(printf '3\n3\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "关闭 Swap 退出码" "0" "$rc"
+check_has "会 swapoff" "$CUR_OUT" "swapoff"
+check_has "关闭提示" "$CUR_OUT" "Swap 已关闭并删除"
+
+# BBR：关闭
+CUR_OUT="$WORK/ti-bbr-off.out"
+rc="$(printf '3\n12\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "关闭 BBR 退出码" "0" "$rc"
+check_has "会删掉 bbr 配置" "$CUR_OUT" "rm -f /etc/sysctl.d/99-acxc-vps-bbr.conf"
+check_has "关闭提示" "$CUR_OUT" "BBR 已关闭"
+
+# UFW：放行端口
+CUR_OUT="$WORK/ti-ufw-open.out"
+rc="$(printf '3\n4\n2\n8080\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "UFW 放行端口退出码" "0" "$rc"
+check_has "放行了 8080" "$CUR_OUT" "ufw allow 8080/tcp"
+
+# UFW：关闭端口
+CUR_OUT="$WORK/ti-ufw-close.out"
+rc="$(printf '3\n4\n3\n8080\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "UFW 关闭端口退出码" "0" "$rc"
+check_has "关闭了 8080" "$CUR_OUT" "ufw delete allow 8080/tcp"
+
+# UFW：关 SSH 端口要有保护
+CUR_OUT="$WORK/ti-ufw-ssh.out"
+rc="$(printf '3\n4\n3\n22\nn\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "关闭 SSH 端口退出码" "0" "$rc"
+check_has "提示这是 SSH 端口" "$CUR_OUT" "是当前 SSH 端口"
+check_hasnt "回答 n 后不会真去关" "$CUR_OUT" "ufw delete allow 22/tcp"
 
 echo
 if [ "$FAIL" -gt 0 ]; then

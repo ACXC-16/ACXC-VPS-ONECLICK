@@ -1430,7 +1430,7 @@ create_swap() {
   if [ -e "$SWAPFILE" ]; then
     warn "${SWAPFILE} 已存在"
     if ! ask_yn "是否删除并重建 ${SWAPFILE}？" n; then return 1; fi
-    run swapoff "$SWAPFILE" >/dev/null 2>&1 || true
+    run swapoff "$SWAPFILE" || true
     run rm -f "$SWAPFILE"
   fi
 
@@ -1632,6 +1632,7 @@ EOF
 # ============ 步骤 3：安装常用工具 / BBR网络加速 / Swap ===================
 # 顺序按「使用人数 + 重要性」排；多选时编号之间要用空格隔开
 # 每组格式：包名|显示名（短、好懂）|是否推荐（y = 直接回车时会装上，只标 3 个）
+TOOL_ACT=""
 TOOL_ITEMS=(
   "curl wget ca-certificates gnupg|下载与证书|y"
   "fail2ban|防 SSH 爆破|y"
@@ -1647,8 +1648,183 @@ TOOL_ITEMS=(
   "bbr|BBR 加速|n"
 )
 
+# ---------- 工具项：状态查询 / 开与关 / 安装与卸载 ----------
+fail2ban_state() {
+  if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
+    printf '运行中'
+  elif have dpkg && dpkg -s fail2ban >/dev/null 2>&1; then
+    printf '已安装（未运行）'
+  else
+    printf '未安装'
+  fi
+}
+
+fail2ban_disable() {
+  info "停止并禁用 fail2ban…"
+  run systemctl stop fail2ban || true
+  run systemctl disable fail2ban || true
+  if [ -f "$FAIL2BAN_CONF" ]; then
+    run rm -f "$FAIL2BAN_CONF" && ok "已删除配置：${FAIL2BAN_CONF}"
+  fi
+  ok "fail2ban 已停止并禁用（软件包保留，需要时可以再开启）"
+  return 0
+}
+
+swap_state() {
+  local mb
+  mb="$(swap_total_mb)"
+  if [ "${mb:-0}" -gt 0 ]; then printf '已启用 %sMB' "$mb"; else printf '未启用'; fi
+}
+
+swap_disable() {
+  info "关闭并删除 Swap…"
+  # 不是 swap 文件时 swapoff 会报错，用 || true 忽略即可
+  run swapoff "$SWAPFILE" || true
+  if [ -f "$SWAPFILE" ]; then
+    run rm -f "$SWAPFILE" || true
+  fi
+  if grep -qF "$SWAPFILE" /etc/fstab 2>/dev/null; then
+    run sed -i "\|${SWAPFILE}|d" /etc/fstab || true
+  fi
+  if [ -f /etc/sysctl.d/99-acxc-vps-swap.conf ]; then
+    run rm -f /etc/sysctl.d/99-acxc-vps-swap.conf || true
+  fi
+  ok "Swap 已关闭并删除（当前：$(swap_state)）"
+  return 0
+}
+
+bbr_state() {
+  local cc
+  cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+  if [ "$cc" = "bbr" ]; then printf '已开启'; else printf '未开启（%s）' "${cc:-未知}"; fi
+}
+
+bbr_disable() {
+  info "关闭 BBR…"
+  run rm -f "$SYSCTL_BBR_CONF" || true
+  run sysctl -q -w net.core.default_qdisc=fq_codel >/dev/null 2>&1 || true
+  run sysctl -q -w net.ipv4.tcp_congestion_control=cubic >/dev/null 2>&1 || true
+  ok "BBR 已关闭（当前：$(bbr_state)）"
+  return 0
+}
+
+ufw_state() {
+  if ! have ufw; then printf '未安装'; return 0; fi
+  case "$(ufw status 2>/dev/null)" in
+    *"Status: active"*) printf '已启用' ;;
+    *) printf '已停止' ;;
+  esac
+}
+
+ufw_port_helper() { # $1=1 放行 / 2 关闭
+  local port="" act="$1"
+  if ! ask_value "请输入端口号" ""; then return 0; fi
+  port="$(trim "$REPLY")"
+  if ! valid_port "$port"; then
+    warn "端口不合法（应为 1-65535 的数字）：$port"
+    return 1
+  fi
+  port="$((10#$port))"
+  if [ "$act" -eq 2 ]; then
+    case " $(current_ssh_ports) " in
+      *" $port "*)
+        warn "端口 ${port} 是当前 SSH 端口，关掉会让你连不上服务器！"
+        if ! ask_yn "确定还要关闭吗？" n; then return 0; fi ;;
+    esac
+  fi
+  if [ "$act" -eq 1 ]; then
+    if run ufw allow "${port}/tcp" 2>/dev/null; then
+      ok "已放行 ${port}/tcp"
+    else
+      warn "放行失败，请手动执行：ufw allow ${port}/tcp"
+      return 1
+    fi
+  else
+    if run ufw delete allow "${port}/tcp" 2>/dev/null; then
+      ok "已关闭 ${port}/tcp"
+    else
+      warn "关闭失败（这个端口可能本来就没放行），请手动检查：ufw status numbered"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+ufw_menu() {
+  local line="" rc=0
+  printf '\n  %s防火墙（UFW）%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(ufw_state)"
+  printf '   %s1)%s 安装并启用（自动先放行 SSH 端口）\n' "${C_GRN}" "${C_RST}"
+  printf '   %s2)%s 放行某个端口\n' "${C_GRN}" "${C_RST}"
+  printf '   %s3)%s 关闭某个端口\n' "${C_GRN}" "${C_RST}"
+  printf '   %s0)%s 跳过\n' "${C_DIM}" "${C_RST}"
+  while :; do
+    if ! read_line "请选择（回车=1）"; then return 0; fi
+    line="$(trim "$(menu_clean_input "$REPLY")")"
+    case "$line" in
+      ''|1) install_ufw || rc=1; return "$rc" ;;
+      2) ufw_port_helper 1 || rc=1; return "$rc" ;;
+      3) ufw_port_helper 2 || rc=1; return "$rc" ;;
+      0|q|Q) return 0 ;;
+      *) warn "请输入 0-3" ;;
+    esac
+  done
+}
+
+# 安装 / 卸载 小菜单：回显 i（安装）u（卸载）空（跳过）
+tool_pick_action() { # $1=标题 $2=安装文案 $3=卸载文案 → 结果放 TOOL_ACT（i/u/空）
+  local line=""
+  TOOL_ACT=""
+  printf '\n  %s%s%s\n' "${C_BLD}" "$1" "${C_RST}"
+  printf '   %s1)%s %s\n' "${C_GRN}" "${C_RST}" "${2:-安装}"
+  printf '   %s2)%s %s\n' "${C_BLD}${C_YEL}" "${C_RST}" "${3:-卸载}"
+  printf '   %s0)%s 跳过\n' "${C_DIM}" "${C_RST}"
+  while :; do
+    if ! read_line "请选择（回车=1）"; then return 0; fi
+    line="$(trim "$(menu_clean_input "$REPLY")")"
+    case "$line" in
+      ''|1) TOOL_ACT="i"; return 0 ;;
+      2) TOOL_ACT="u"; return 0 ;;
+      0|q|Q) return 0 ;;
+      *) warn "请输入 0 / 1 / 2" ;;
+    esac
+  done
+}
+
+tool_pkgs_install() { # $1=标题 $2=包名
+  info "安装：${1}（$(printf '%s' "$2" | tr -s ' ')）…"
+  # shellcheck disable=SC2086
+  if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $2; then
+    ok "已安装：${1}"
+    return 0
+  fi
+  warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
+  local sel="" rc=0
+  for sel in $2; do
+    run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$sel" >/dev/null 2>&1 || {
+      warn "安装失败：$sel"
+      rc=1
+    }
+  done
+  return "$rc"
+}
+
+tool_pkgs_remove() { # $1=标题 $2=包名
+  if [ "$1" = "下载与证书" ]; then
+    warn "卸载${1}会影响 apt 更新与下载（ca-certificates / gnupg 是很多工具的前置依赖）。"
+    if ! ask_yn "确定还要卸载吗？" n; then return 0; fi
+  fi
+  info "卸载：${1}（$(printf '%s' "$2" | tr -s ' ')）…"
+  # shellcheck disable=SC2086
+  if run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge $2; then
+    ok "已卸载：${1}"
+    return 0
+  fi
+  warn "卸载时有报错，可稍后手动检查（dpkg -l | grep 包名）"
+  return 1
+}
+
 step_extras() {
-  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0
+  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0 act=""
   local -a g_pkgs=() g_title=() g_rec=() g_label=()
   local entry pkgs="" title="" rec="" sel=""
 
@@ -1738,40 +1914,56 @@ step_extras() {
     fi
 
     printf '\n'
+    printf '\n'
     for i in "${PLAN_TOOLS[@]}"; do
       pkgs="${g_pkgs[$i]}"
       title="${g_title[$i]}"
+      act=""
       case "$pkgs" in
-        fail2ban)
-          info "安装配置 fail2ban…"
-          step_fail2ban || rcp=1
-          continue ;;
         timezone)
           set_timezone || rcp=1
           continue ;;
+        fail2ban)
+          [ "$ASSUME_YES" -eq 1 ] || tool_pick_action "防 SSH 爆破（fail2ban）　当前：$(fail2ban_state)" "安装并启用" "停止并禁用"; act="$TOOL_ACT"
+          case "$act" in
+            ''|i) step_fail2ban || rcp=1 ;;
+            u) fail2ban_disable || rcp=1 ;;
+          esac
+          continue ;;
         swap)
-          setup_swap || rcp=1
+          [ "$ASSUME_YES" -eq 1 ] || tool_pick_action "虚拟内存（Swap）　当前：$(swap_state)" "创建并启用" "关闭并删除"; act="$TOOL_ACT"
+          case "$act" in
+            ''|i) setup_swap || rcp=1 ;;
+            u) swap_disable || rcp=1 ;;
+          esac
           continue ;;
         ufw)
-          install_ufw || rcp=1
+          if [ "$ASSUME_YES" -eq 1 ]; then
+            install_ufw || rcp=1
+          else
+            ufw_menu || rcp=1
+          fi
           continue ;;
         bbr)
-          enable_bbr || rcp=1
+          [ "$ASSUME_YES" -eq 1 ] || tool_pick_action "BBR 加速　当前：$(bbr_state)" "开启" "关闭"; act="$TOOL_ACT"
+          case "$act" in
+            ''|i) enable_bbr || rcp=1 ;;
+            u) bbr_disable || rcp=1 ;;
+          esac
           continue ;;
       esac
-      info "安装：${title}（$(printf '%s' "$pkgs" | tr -s ' ')）"
-      # shellcheck disable=SC2086
-      if run env DEBIAN_FRONTEND=noninteractive apt-get -y install $pkgs; then
-        ok "已安装：${title}"
+      # 普通软件包：安装 或 卸载
+      if [ "$ASSUME_YES" -eq 1 ]; then
+        act="i"
       else
-        warn "整体安装失败，改为逐个装（个别包在精简系统上可能没有）…"
-        for sel in $pkgs; do
-          run env DEBIAN_FRONTEND=noninteractive apt-get -y install "$sel" >/dev/null 2>&1 || {
-            warn "安装失败：$sel"
-            rcp=1
-          }
-        done
+        tool_pick_action "${title}（$(printf ''%s'' "$pkgs" | tr -s '' '')）" "安装" "卸载"
+        act="$TOOL_ACT"
       fi
+      case "$act" in
+        i) tool_pkgs_install "$title" "$pkgs" || rcp=1 ;;
+        u) tool_pkgs_remove "$title" "$pkgs" || rcp=1 ;;
+        *) info "已跳过：${title}" ;;
+      esac
     done
     printf '\n'
     if [ "$rcp" -eq 0 ]; then
