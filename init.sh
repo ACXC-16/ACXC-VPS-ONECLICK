@@ -2435,15 +2435,25 @@ screen_margin() {
 # 问终端"光标现在在第几行"（DSR）。拿到行号才启用备用屏幕，拿不到就不启用，
 # 这样在实现不完整的终端上也不会把提示符扔到屏幕中间（宁可不用备用屏幕）。
 detect_start_row() {
-  local reply="" row=""
+  local reply="" row="" saved=""
   if [ -n "${ACXC_VPS_START_ROW:-}" ]; then
     printf '%s' "$ACXC_VPS_START_ROW"
     return 0
   fi
   [ "$TTY_OK" -eq 1 ] || return 0
-  printf '\033[6n' >/dev/tty 2>/dev/null || return 0
-  # shellcheck disable=SC2016,SC2034  # -d 的结束符就是要大写的 R（DSR 回复以 R 结尾）
-  IFS= read -r -t 1 -d "R" reply </dev/tty 2>/dev/null || true
+  # 用非规范模式问终端"光标在第几行"（DSR）：
+  # 规范模式下回复不带换行，会一直留在输入队列里，最后被 shell 打到屏幕上（^[[15;1R）。
+  saved="$(stty -g < /dev/tty 2>/dev/null)" || return 0
+  if ! stty -icanon -echo min 0 time 3 < /dev/tty 2>/dev/null; then
+    stty "$saved" < /dev/tty 2>/dev/null || true
+    return 0
+  fi
+  printf '\033[6n' > /dev/tty 2>/dev/null || true
+  # shellcheck disable=SC2016,SC2034  # -d 的参数就是要大写的 R（DSR 回复以 R 结尾）
+  IFS= read -r -t 1 -d 'R' reply < /dev/tty 2>/dev/null || true
+  # 把可能残留的字节吃掉，避免后续被当成用户输入
+  while IFS= read -r -t 1 -n 1 REPLY < /dev/tty 2>/dev/null; do :; done
+  stty "$saved" < /dev/tty 2>/dev/null || true
   reply="${reply##*\[}"
   row="${reply%%;*}"
   case "$row" in ''|*[!0-9]*) return 0 ;; esac
