@@ -1383,7 +1383,7 @@ install_ufw() {
     fi
   done
 
-  if ask_yn "是否同时放行网站常用端口 80 / 443？" n; then
+  if ask_yn "是否同时放行网站常用端口 80 / 443？" y; then
     run ufw allow 80/tcp 2>/dev/null && ok "已放行 80/tcp"
     run ufw allow 443/tcp 2>/dev/null && ok "已放行 443/tcp"
   fi
@@ -1402,7 +1402,7 @@ install_ufw() {
     printf '\n'
     warn "启用后默认拒绝所有入站连接，只放行上面列出的端口。"
     warn "如果还有别的服务要对外开放（数据库 / 面板等），启用后请立刻执行：ufw allow <端口>/tcp"
-    if ! ask_yn "确认现在启用 ufw？" y; then
+    if ! ask_yn "确认现在启用 ufw？" n; then
       info "已跳过启用；规则已经准备好，随时可以执行 ufw enable"
       return "$rc"
     fi
