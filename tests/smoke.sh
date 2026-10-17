@@ -321,7 +321,8 @@ check_has "列出了子选项" "$CUR_OUT" "下载与证书"
 check_has "标了推荐项" "$CUR_OUT" "推荐"
 check_hasnt "不再打印「按需」字样" "$CUR_OUT" "按需"
 # shellcheck disable=SC2016  # 这里的正则要用单引号，避免被 shell 展开
-nrec="$(grep -cE '[0-9]+[)] .*推荐' "$CUR_OUT")"
+# 只数第一屏列表里的推荐项（单选会再回本菜单，列表会出现多次）
+nrec="$(awk '/可安装 \/ 可设置的项目/{n++; next} n==1 && /^ *[0-9]+[)] /{ if ($0 ~ /推荐/) c++ } END{print c+0}' "$CUR_OUT")"
 if [ "$nrec" -eq 3 ]; then ok "推荐项正好 3 个"; else bad "推荐项应为 3 个，实际 ${nrec} 个"; fi
 check_has "只安装选中的一组" "$CUR_OUT" "install curl wget ca-certificates gnupg"
 check_hasnt "没有装没选的那些" "$CUR_OUT" "install vim nano"
@@ -519,10 +520,23 @@ check "子菜单只显示一次" "1" "$n"
 check_has "结果后回到主菜单" "$CUR_OUT" "操作菜单"
 
 CUR_OUT="$WORK/norepeat2.out"
-rc="$(printf '3\n1\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
-check "工具流程退出码" "0" "$rc"
+rc="$(printf '3\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "工具单选退出码" "0" "$rc"
 n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
-check "工具列表只显示一次" "1" "$n"
+check "只选一项：装完回到本菜单（列表 2 次）" "2" "$n"
+
+CUR_OUT="$WORK/norepeat2b.out"
+rc="$(printf '3\n1 2\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "工具多选退出码" "0" "$rc"
+n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
+check "选两项：装完回上级菜单（列表 1 次）" "1" "$n"
+
+CUR_OUT="$WORK/norepeat2c.out"
+rc="$(printf '3\na\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+# 全选会连 BBR 一起做；本机内核不支持时该步会返回 1，这里 0/1 都算正常
+case "$rc" in 0|1) ok "工具全选（rc=$rc）" ;; *) bad "工具全选退出码异常：$rc" ;; esac
+n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
+check "选 a（全部）：装完回上级菜单（列表 1 次）" "1" "$n"
 
 CUR_OUT="$WORK/norepeat3.out"
 rc="$(printf '8\n3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
