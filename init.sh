@@ -2424,7 +2424,7 @@ screen_margin() {
   [ "$TTY_OK" -eq 1 ] || return 0
   detect_term_size
   n=$(( (TERM_LINES - 26) / 2 ))
-  [ "$n" -lt 0 ] && n=0
+  [ "$n" -lt 3 ] && n=3
   [ "$n" -gt 10 ] && n=10
   for ((i = 0; i < n; i++)); do printf '\n'; done
   return 0
