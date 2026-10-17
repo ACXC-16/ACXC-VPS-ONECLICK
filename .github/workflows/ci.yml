@@ -31,3 +31,6 @@ jobs:
 
       - name: 冒烟测试（全部在 --dry-run 下执行，不改系统）
         run: bash tests/smoke.sh
+
+      - name: 全路径自检（每个菜单入口 / 每个参数都跑一遍）
+        run: bash tests/audit.sh

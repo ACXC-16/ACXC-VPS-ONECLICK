@@ -243,8 +243,9 @@ check_has "有步骤失败提示" "$CUR_OUT" "步骤失败"
 echo "== 13) 参数校验 =="
 CUR_OUT="$WORK/f.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only nope)"
-check "--only 未知步骤仍可运行" "0" "$rc"
-check_has "提示步骤不存在" "$CUR_OUT" "--only 里的步骤不存在"
+check "--only 未知步骤应报错退出（rc=2）" "2" "$rc"
+check_has "提示步骤名不认识" "$CUR_OUT" "不认识的步骤名：nope"
+check_has "提示可用步骤名" "$CUR_OUT" "可用：sysupdate access extras"
 CUR_OUT="$WORK/g.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --bogus)"
 check "未知参数退出码" "2" "$rc"
@@ -779,6 +780,36 @@ check_has "卸载 fail2ban 包默认 Y" "$ROOT/init.sh" 'ask_yn "是否顺便卸
 check_has "卸载 ufw 包默认 Y" "$ROOT/init.sh" 'ask_yn "是否卸载 ufw 软件包？" y'
 check_has "完全卸载确认默认 Y" "$ROOT/init.sh" 'ask_yn "确认要完全卸载吗？" y'
 check_has "删备份目录默认 Y" "$ROOT/init.sh" '是否一并删除备份目录 /root/acxc-vps-backup ？（删掉后无法再用脚本回滚）" y'
+
+echo "== 45) --only / --skip 的步骤名校验（拼错不能静默成功）=="
+CUR_OUT="$WORK/only-lower.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only SYSUPDATE)"
+check "大写步骤名也能用" "0" "$rc"
+CUR_OUT="$WORK/only-legacy.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only ssh-port)"
+check "旧写法 ssh-port 仍兼容" "0" "$rc"
+CUR_OUT="$WORK/skip-bad.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --skip nope --only sysupdate)"
+check "--skip 拼错应报错退出（rc=2）" "2" "$rc"
+check_has "--skip 提示不认识的步骤名" "$CUR_OUT" "不认识的步骤名：nope"
+CUR_OUT="$WORK/port-zero.out"
+rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --port 052052 --only access)"
+check "端口带前导零也能处理" "0" "$rc"
+check_has "前导零被规范化成 52052" "$CUR_OUT" "Port 52052"
+
+echo "== 46) 日志文件权限（--log-file 指定的路径也要 600）=="
+if [ "$(uname -s 2>/dev/null)" = "Linux" ]; then
+  LOGT="$WORK/logperm.log"
+  run_case /dev/null "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate --log-file "$LOGT" >/dev/null 2>&1
+  if [ -f "$LOGT" ]; then
+    mode="$(stat -c '%a' "$LOGT" 2>/dev/null)"
+    check "日志文件权限是 600" "600" "$mode"
+  else
+    bad "没生成日志文件：$LOGT"
+  fi
+else
+  ok "非 Linux 环境，跳过权限检查"
+fi
 
 echo
 if [ "$FAIL" -gt 0 ]; then
