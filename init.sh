@@ -68,6 +68,11 @@ OPT_PASSWORD=""
 GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
 SSH_PORT_CHANGED=""
+SSH_NEW_PORT=""
+SSH_KEEP_OLD=0
+SSH_OLD_PORTS=""
+PASSWD_NEW=""
+PASSWD_GEN=0
 NO_CHANGE=0
 
 # 交互界面：状态表 + 编号菜单（纯文字，任何终端都能用；不支持图形方框是有意为之）
@@ -664,8 +669,18 @@ ssh_restore_backup() {
   warn "正在回滚 SSH 配置到修改前…"
   if [ -f "${bak}/sshd_config" ]; then cp -a "${bak}/sshd_config" /etc/ssh/sshd_config; fi
   if [ -d "${bak}/sshd_config.d" ]; then
-    rm -rf /etc/ssh/sshd_config.d
-    cp -a "${bak}/sshd_config.d" /etc/ssh/sshd_config.d
+    # 先把备份完整还原到旁边的临时目录，成功后再整体替换：
+    # 万一拷贝中途失败（磁盘满等），原来的 drop-in 目录还在，不会把 SSH 配置弄丢。
+    local newd="/etc/ssh/sshd_config.d.restore.$$"
+    rm -rf "$newd"
+    if cp -a "${bak}/sshd_config.d" "$newd"; then
+      rm -rf /etc/ssh/sshd_config.d
+      mv "$newd" /etc/ssh/sshd_config.d || { warn "替换 drop-in 目录失败，备份在 $newd"; return 1; }
+    else
+      rm -rf "$newd"
+      warn "还原 drop-in 目录失败（磁盘空间？），当前配置未改动，请手动检查 /etc/ssh/"
+      return 1
+    fi
   else
     rm -f "$MANAGED_SSHD_CONF"
   fi
@@ -875,6 +890,12 @@ ssh_ask_port() {
     done
   fi
 
+  # 端口统一成不带前导零的十进制（052052 → 52052），避免写进 ufw / sshd 时出现怪值
+  case "$new_port" in
+    ''|*[!0-9]*) ;;
+    *) new_port="$((10#$new_port))" ;;
+  esac
+
   if [ -n "$old_ports" ]; then
     case " $old_ports " in
       *" $new_port "*) ;;
@@ -926,7 +947,7 @@ ssh_apply_port() {
 
   # 本机防火墙放行
   info "检查本机防火墙…"
-  if have ufw && ufw status 2>/dev/null | grep -q "^Status: active"; then
+  if have ufw && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
     if run ufw allow "${new_port}/tcp" >/dev/null 2>&1; then
       ok "ufw 已放行 ${new_port}/tcp"
     else
@@ -940,7 +961,7 @@ ssh_apply_port() {
     fi
   else
     info "未检测到已启用的 ufw / firewalld，跳过本机防火墙放行。"
-    if have iptables && iptables -S 2>/dev/null | grep -qE '^-P (INPUT|FORWARD) DROP'; then
+    if have iptables && case "$(iptables -S 2>/dev/null)" in *"-P INPUT DROP"*|*"-P FORWARD DROP"*) true ;; *) false ;; esac; then
       warn "iptables 默认策略是 DROP，请自行确认新端口没有被自建规则拦截。"
     fi
   fi
@@ -1375,7 +1396,7 @@ install_ufw() {
     return 0
   fi
 
-  if ufw status 2>/dev/null | grep -q "^Status: active"; then
+  if case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
     ok "ufw 已经在运行（规则已更新）"
   else
     printf '\n'
@@ -1441,9 +1462,14 @@ create_swap() {
   fi
   if ! swapon "$SWAPFILE" 2>/dev/null; then
     err "swapon 失败（部分虚拟化环境不允许 Swap）"
+    rm -f "$SWAPFILE" 2>/dev/null || true
     return 1
   fi
   if ! grep -qF "$SWAPFILE" /etc/fstab 2>/dev/null; then
+    # fstab 若不以换行结尾，新条目会黏到最后一行上，可能导致开机挂载异常
+    if [ -s /etc/fstab ] && [ -n "$(tail -c 1 /etc/fstab 2>/dev/null)" ]; then
+      printf '\n' >>/etc/fstab
+    fi
     printf '%s\n' "${SWAPFILE} none swap sw 0 0  # acxc-vps" >>/etc/fstab
   fi
   printf '%s\n' 'vm.swappiness=10' >/etc/sysctl.d/99-acxc-vps-swap.conf
@@ -1505,7 +1531,7 @@ set_timezone() {
         ''|*[!0-9]*) ;;   # 不是纯数字 → 当成时区名
         *)
           if [ "$tz" -ge 1 ] && [ "$tz" -le "${#TZ_CHOICES[@]}" ]; then
-            tz="${TZ_CHOICES[$((tz - 1))]%%|*}"
+            tz="${TZ_CHOICES[$((10#$tz - 1))]%%|*}"
             info "已选择：$tz"
           else
             warn "编号超出范围（1-${#TZ_CHOICES[@]}，或 0 = 不改）"
@@ -1690,7 +1716,7 @@ step_extras() {
               *[!0-9]*) ok=0; break ;;
             esac
             if [ "$tok" -lt 1 ] || [ "$tok" -gt "${#g_pkgs[@]}" ]; then ok=0; break; fi
-            plan_tool_add "$((tok - 1))"
+            plan_tool_add "$((10#$tok - 1))"
           done
           if [ "$ok" -ne 1 ] || [ "${#PLAN_TOOLS[@]}" -eq 0 ]; then
             warn "编号不对：请输入 1-${#g_pkgs[@]}，多个编号之间用空格隔开（例如：1 3）"
@@ -1754,7 +1780,7 @@ list_steps() {
     IFS='|' read -r slug title def fn <<<"$entry"
     printf '  %-13s %-40s 默认: %s\n' "$slug" "$title" "$def"
   done
-  printf '\n用法：--only sysupdate,ssh-port   /   --skip extras\n'
+  printf '\n用法：--only sysupdate,access   /   --skip extras\n'
 }
 
 # 等用户按回车（看完长输出后继续）
@@ -2084,7 +2110,7 @@ uninstall_configs() {
 
   # UFW：先关防火墙再卸载，避免清到一半把自己关在门外
   if have ufw; then
-    if [ "$DRY_RUN" -eq 0 ] && ufw status 2>/dev/null | grep -q "^Status: active"; then
+    if [ "$DRY_RUN" -eq 0 ] && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
       if ask_yn "关闭 UFW 防火墙（ufw disable）？" y; then
         run ufw --force disable && ok "ufw 已关闭"
       fi
@@ -2229,7 +2255,7 @@ status_extras() {
   if have ufw; then
     if have systemctl && systemctl is-active ufw >/dev/null 2>&1; then
       out="${out} · ufw 开"
-    elif [ "$DRY_RUN" -eq 0 ] && ufw status 2>/dev/null | grep -q "^Status: active"; then
+    elif [ "$DRY_RUN" -eq 0 ] && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
       out="${out} · ufw 开"
     else
       out="${out} · ufw 关"
@@ -2623,6 +2649,12 @@ update_script() {
     return 1
   fi
   newv="$(grep -m1 '^SCRIPT_VERSION=' "$tmp" 2>/dev/null | cut -d'"' -f2)"
+  # 校验下载内容：必须是个像样的脚本，否则不覆盖现有缓存（避免把 acxc 更新成半截文件）
+  if [ ! -s "$tmp" ] || ! grep -q '^SCRIPT_NAME=' "$tmp" 2>/dev/null || ! grep -q '^main ' "$tmp" 2>/dev/null; then
+    warn "下载到的文件看起来不完整，已放弃这次更新（保留现有版本 v${oldv}）"
+    rm -f "$tmp"
+    return 1
+  fi
   mv -f "$tmp" "${CACHE_DIR}/acxc.sh" 2>/dev/null || cp -f "$tmp" "${CACHE_DIR}/acxc.sh" 2>/dev/null || true
   rm -f "$tmp"
   install_shortcut quiet 2>/dev/null || true
@@ -2646,6 +2678,27 @@ step_slug_by_index() { # $1=菜单序号(1..N) → 输出步骤标识
   done
   return 1
 }
+# 校验 --only / --skip 里写的步骤名是否都存在（防止拼错后静默什么都不做）
+check_step_names() {
+  local want="$1" label="$2" tok known="" bad="" entry
+  [ -n "$want" ] || return 0
+  for entry in "${STEPS[@]}"; do
+    known="${known} ${entry%%|*}"
+  done
+  for tok in $(printf '%s' "$want" | tr ',' ' '); do
+    [ -n "$tok" ] || continue
+    case " $known " in
+      *" $tok "*) ;;
+      *) bad="${bad}${bad:+ }${tok}" ;;
+    esac
+  done
+  if [ -n "$bad" ]; then
+    warn "${label} 里有不认识的步骤名：${bad}（可用：${known# }）"
+    return 1
+  fi
+  return 0
+}
+
 # 非交互路径（--only / --skip / --yes）用的执行计划
 build_plan() {
   local entry slug title def fn
@@ -2675,8 +2728,8 @@ build_plan() {
 confirm_plan() {
   local t
   if [ "${#PLAN_SLUGS[@]}" -eq 0 ]; then
-    warn "没有选择任何步骤，退出。"
-    exit 0
+    err "没有匹配到任何步骤，什么都没做（用 --list 查看可用步骤名）。"
+    exit 2
   fi
   title "即将执行以下步骤"
   for t in "${PLAN_TITLES[@]}"; do
@@ -2727,7 +2780,7 @@ maybe_reboot() {
     fi
     # 选 Y 就直接重启，不再等待；先把重连方式打出来
     p="$(printf '%s' "$SSH_M_PORTS" | awk '{print $1}')"
-    if [ -z "$p" ]; then p="$(trim "$(current_ssh_ports)")"; fi
+      if [ -z "$p" ]; then p="$(current_ssh_ports | awk '{print $1}')"; fi
     info "立即重启（连接马上会断开）"
     if [ -n "$p" ]; then
       printf '  重启后重新连接：ssh -p %s root@<服务器IP>\n' "$p"
@@ -2839,8 +2892,8 @@ ACXC16-VPS新机一键脚本 —— Ubuntu / Debian VPS 初始化交互式脚本
       --password <密码> 明确指定新的 root 密码（会留在 shell 历史里，用完记得清）
       --gen-password   明确要求生成随机 root 密码：先把密码显示给你确认，确认后才生效
       --port <端口>    直接指定新的 SSH 端口（跳过询问，默认 52052）
-      --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,ssh-port
-      --skip <列表>    跳过列出的步骤，例如 --skip tools,tuning
+      --only <列表>    只执行列出的步骤，逗号分隔，例如 --only sysupdate,access
+      --skip <列表>    跳过列出的步骤，例如 --skip extras
       --dry-run        演练模式：只打印将要执行的命令，不修改系统
       --force          跳过系统版本检测（非 Ubuntu/Debian 也能跑，风险自负）
       --no-color       关闭彩色输出
@@ -2892,7 +2945,10 @@ parse_args() {
     esac
     shift
   done
-  # 兼容旧写法：--only ssh-port / --only root-passwd 都当作 access（两者已合并为一项）
+  # 1) 步骤名统一小写，避免 --only SYSUPDATE 这种写法踩坑
+  ONLY_LIST="$(printf '%s' "$ONLY_LIST" | tr '[:upper:]' '[:lower:]')"
+  SKIP_LIST="$(printf '%s' "$SKIP_LIST" | tr '[:upper:]' '[:lower:]')"
+  # 2) 兼容旧写法：ssh-port / root-passwd 都当作 access（两者已合并为一项）
   if [ -n "$ONLY_LIST" ]; then
     ONLY_LIST="${ONLY_LIST//ssh-port/access}"
     ONLY_LIST="${ONLY_LIST//root-passwd/access}"
@@ -2901,12 +2957,9 @@ parse_args() {
     SKIP_LIST="${SKIP_LIST//ssh-port/access}"
     SKIP_LIST="${SKIP_LIST//root-passwd/access}"
   fi
-  if [ -n "$ONLY_LIST" ]; then
-    local s
-    for s in $(printf '%s' "$ONLY_LIST" | tr ',' ' '); do
-      in_list "$s" "$(steps_slugs)" || warn "--only 里的步骤不存在：$s"
-    done
-  fi
+  # 3) 拼错的步骤名直接报错退出，别让脚本静默什么都不做
+  if [ -n "$ONLY_LIST" ] && ! check_step_names "$ONLY_LIST" "--only"; then exit 2; fi
+  if [ -n "$SKIP_LIST" ] && ! check_step_names "$SKIP_LIST" "--skip"; then exit 2; fi
   return 0
 }
 
@@ -2924,6 +2977,8 @@ main() {
   prepare_log
   parse_args "$@"
   init_colors
+  # --log-file 可能在参数里改过路径，这里再检查一次（可写性 + 600 权限）
+  prepare_log
   init_log "$@"
   require_root
   detect_tty

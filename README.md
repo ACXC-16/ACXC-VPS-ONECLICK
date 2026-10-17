@@ -149,5 +149,5 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
 - **改 SSH 端口前**先在云服务商安全组放行新端口；改完别关当前窗口，另开终端 `ssh -p 新端口 root@IP` 验证成功再关旧连接。
 - `acxc1616` 是脚本内置默认密码，**容易被猜到**，登录后建议尽快改成自己的强密码。
 - 回滚：`cp -a /root/acxc-vps-backup/<时间戳>-ssh/. /etc/ssh/ && systemctl restart ssh`
-- 无人值守：`| bash -s -- --yes`（不会自动改 root 密码）；只跑某项：`--only sysupdate`；演练：`--dry-run`；全部参数：`--help`
+- 无人值守：`| bash -s -- --yes`（不会自动改 root 密码）；只跑某项：`--only sysupdate`（可用 `sysupdate` / `access` / `extras`，大小写都行，拼错会直接报错而不是静默跳过）；演练：`--dry-run`；全部参数：`--help`
 - 只在 Ubuntu / Debian（含衍生版）上测试过；其它发行版需要 `--force`，风险自负。
