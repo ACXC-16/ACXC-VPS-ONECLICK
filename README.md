@@ -80,22 +80,39 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
 
 ```
   可安装 / 可设置的项目：
-   1) 下载与证书（curl wget GPG）            推荐
-   2) 防 SSH 暴力破解（fail2ban）            推荐
-   3) 虚拟内存（Swap，小内存建议装）         推荐
-   4) 防火墙（UFW，自动放行 SSH 端口）
-   5) 看进程 / 端口（htop tmux lsof）
-   6) 编辑文件（vim nano）
-   7) 传文件 / 解压缩（git rsync zip）
-   8) Tab 命令补全（bash-completion）
-   9) 看目录 / 磁盘 / JSON（tree ncdu jq）
-  10) 网络排障（mtr ping 端口探测）
-  11) 设置时区（默认 Asia/Shanghai）
-  12) BBR 网络加速（提升网速）
+   1) 下载与证书             推荐
+   2) 防 SSH 爆破            推荐
+   3) 加虚拟内存             推荐
+   4) 防火墙
+   5) 进程 / 端口
+   6) 文本编辑
+   7) 传文件 / 解压
+   8) Tab 补全
+   9) 磁盘占用
+  10) 网络排障
+  11) 设置时区
+  12) BBR 加速
    0) 返回主菜单
 
   多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部
 ```
+
+各项目具体装什么（列表只显示短名字，这里是明细）：
+
+| 编号 | 名字 | 实际安装 / 做的事情 |
+| --- | --- | --- |
+| 1 | 下载与证书 | `curl` `wget` `ca-certificates` `gnupg` |
+| 2 | 防 SSH 爆破 | `fail2ban`（含 SSH jail 配置） |
+| 3 | 加虚拟内存 | 创建 `/swapfile` 并写入 fstab |
+| 4 | 防火墙 | `ufw`（先放行 SSH 端口再启用） |
+| 5 | 进程 / 端口 | `htop` `tmux` `lsof` |
+| 6 | 文本编辑 | `vim` `nano` |
+| 7 | 传文件 / 解压 | `git` `rsync` `unzip` `zip` |
+| 8 | Tab 补全 | `bash-completion` |
+| 9 | 磁盘占用 | `jq` `tree` `ncdu` |
+| 10 | 网络排障 | `net-tools` `dnsutils` `mtr-tiny` `traceroute` |
+| 11 | 设置时区 | 列出 19 个常用时区供选择 |
+| 12 | BBR 加速 | 开启 BBR 拥塞控制 |
 
 **选时区**（在第 3 项菜单里）—— 会先把全球主要时区列成编号给你挑，也能直接输时区名：
 
