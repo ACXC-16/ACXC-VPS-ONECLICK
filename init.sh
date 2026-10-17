@@ -1926,9 +1926,9 @@ restart_service_now() { # $1=ssh|fail2ban
 step_restart() {
   local choice="" rc=0
   screen_header "重启服务"
-  printf '  %s1)%s 重启 SSH 服务（sshd）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s1)%s 重启 SSH 服务\n' "${C_GRN}" "${C_RST}"
   printf '  %s2)%s 重启 fail2ban\n' "${C_GRN}" "${C_RST}"
-  printf '  %s3)%s 重启脚本（重新载入，刚更新过脚本就用它）\n' "${C_GRN}" "${C_RST}"
+  printf '  %s3)%s 重启脚本\n' "${C_GRN}" "${C_RST}"
   printf '  %s4)%s 全部重启（SSH + fail2ban + 脚本）\n' "${C_GRN}" "${C_RST}"
   printf '  %s0)%s 返回主菜单\n' "${C_DIM}" "${C_RST}"
   printf '\n'
