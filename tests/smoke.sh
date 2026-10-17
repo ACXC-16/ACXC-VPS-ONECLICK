@@ -614,7 +614,7 @@ printf '#!/bin/sh\necho "<<CLEAR>>"\n' >"$STUBL/clear"
 printf '#!/bin/sh\nif [ "$1" = "size" ]; then echo "40 100"; fi\n' >"$STUBL/stty"
 chmod +x "$STUBL/clear" "$STUBL/stty"
 CUR_OUT="$WORK/margin.out"
-rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm ACXC_VPS_START_ROW=7 run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
 # 清屏之后、标题之前应当有若干空行
 blank="$(awk '/<<CLEAR>>/{seen=1; next} seen && /^ *$/{n++; next} seen{print n; exit}' "$CUR_OUT")"
@@ -669,7 +669,7 @@ check_hasnt "推荐项里不放行 ufw 规则" "$CUR_OUT" "ufw allow"
 
 echo "== 37) 退出时有收尾画面（清屏 + 留白 + 告别语）=="
 CUR_OUT="$WORK/farewell.out"
-rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm ACXC_VPS_START_ROW=7 run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
 check_hasnt "退出时不打印告别语" "$CUR_OUT" "已退出"
 check_hasnt "退出时不提 acxc" "$CUR_OUT" "下次输入"
@@ -721,7 +721,7 @@ check_has "包装脚本仍优先用缓存秒开" "$SCDIR/acxc" "exec bash \"\$CA
 
 echo "== 42) 备用屏幕：退出后终端还原成运行前的样子（脚本界面不留）=="
 CUR_OUT="$WORK/altscreen.out"
-rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm ACXC_VPS_START_ROW=7 run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
 if grep -q '?1049h' "$CUR_OUT"; then ok "进入时切到备用屏幕"; else bad "没有进入备用屏幕"; fi
 if grep -q '?1049l' "$CUR_OUT"; then ok "退出时还原原屏幕"; else bad "退出时没有还原屏幕"; fi
@@ -741,7 +741,8 @@ check "无人值守退出码" "0" "$rc"
 check_hasnt "无人值守不切备用屏幕（输出留在正常屏幕）" "$CUR_OUT" "?1049"
 # 光标位置必须显式保存 / 恢复，否则有些终端退出后提示符会跑到屏幕中间
 check_has "进备用屏幕前保存光标位置" "$ROOT/init.sh" "printf '\033[s'"
-check_has "退出后复位光标位置" "$ROOT/init.sh" "printf '\033[u'"
+check_has "退出后精确回到起始行" "$ROOT/init.sh" "[%s;1H"
+check_hasnt "不再依赖 DECRC 复位光标" "$ROOT/init.sh" "printf '\033[u'"
 check_has "退出后复位颜色" "$ROOT/init.sh" "printf '\033[0m'"
 
 echo "== 43) 输入不合法时就地重问：菜单/列表不重复出现 =="
