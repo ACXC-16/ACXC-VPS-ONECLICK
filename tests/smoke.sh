@@ -731,6 +731,10 @@ CUR_OUT="$WORK/altscreen-off.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
 check "无人值守退出码" "0" "$rc"
 check_hasnt "无人值守不切备用屏幕（输出留在正常屏幕）" "$CUR_OUT" "?1049"
+# 光标位置必须显式保存 / 恢复，否则有些终端退出后提示符会跑到屏幕中间
+check_has "进备用屏幕前保存光标位置" "$ROOT/init.sh" "printf '\033[s'"
+check_has "退出后复位光标位置" "$ROOT/init.sh" "printf '\033[u'"
+check_has "退出后复位颜色" "$ROOT/init.sh" "printf '\033[0m'"
 
 echo "== 43) 输入不合法时就地重问：菜单/列表不重复出现 =="
 CUR_OUT="$WORK/invalid-main.out"
