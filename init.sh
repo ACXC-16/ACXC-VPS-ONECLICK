@@ -1605,20 +1605,20 @@ EOF
 }
 # ============ 步骤 3：安装常用工具 / BBR网络加速 / Swap ===================
 # 顺序按「使用人数 + 重要性」排；多选时编号之间要用空格隔开
-# 每组格式：包名|说明（写清"干什么 + 装什么"）|是否推荐（y = 直接回车时会装上，只标 3 个）
+# 每组格式：包名|显示名（短、好懂）|是否推荐（y = 直接回车时会装上，只标 3 个）
 TOOL_ITEMS=(
-  "curl wget ca-certificates gnupg|下载与证书（curl wget GPG）|y"
-  "fail2ban|防 SSH 暴力破解（fail2ban）|y"
-  "swap|虚拟内存（Swap，小内存建议装）|y"
-  "ufw|防火墙（UFW，自动放行 SSH 端口）|n"
-  "htop tmux lsof|看进程 / 端口（htop tmux lsof）|n"
-  "vim nano|编辑文件（vim nano）|n"
-  "git rsync unzip zip|传文件 / 解压缩（git rsync zip）|n"
-  "bash-completion|Tab 命令补全（bash-completion）|n"
-  "jq tree ncdu|看目录 / 磁盘 / JSON（tree ncdu jq）|n"
-  "net-tools dnsutils mtr-tiny traceroute|网络排障（mtr ping 端口探测）|n"
-  "timezone|设置时区（默认 Asia/Shanghai）|n"
-  "bbr|BBR 网络加速（提升网速）|n"
+  "curl wget ca-certificates gnupg|下载与证书|y"
+  "fail2ban|防 SSH 爆破|y"
+  "swap|加虚拟内存|y"
+  "ufw|防火墙|n"
+  "htop tmux lsof|进程 / 端口|n"
+  "vim nano|文本编辑|n"
+  "git rsync unzip zip|传文件 / 解压|n"
+  "bash-completion|Tab 补全|n"
+  "jq tree ncdu|磁盘占用|n"
+  "net-tools dnsutils mtr-tiny traceroute|网络排障|n"
+  "timezone|设置时区|n"
+  "bbr|BBR 加速|n"
 )
 
 step_extras() {
