@@ -906,6 +906,24 @@ ssh_apply_port() {
   printf '  ④ 万一连不上：用云控制台 VNC 登录后执行脚本最后打印的回滚命令\n'
   printf '\n'
 
+  # 动手前再确认一次（默认 Y，直接回车即执行）
+  if [ "$ASSUME_YES" -eq 0 ]; then
+    if [ -z "$old_ports" ]; then
+      printf '  %s即将修改：SSH 端口 → %s%s\n' "${C_BLD}" "$new_port" "${C_RST}"
+    elif printf '%s' "$old_ports" | tr ' ' '\n' | grep -qx "$new_port"; then
+      printf '  %s即将执行：校验并重载 SSH 配置（端口仍是 %s）%s\n' "${C_BLD}" "$new_port" "${C_RST}"
+    elif [ "$keep_old" -eq 1 ]; then
+      printf '  %s即将修改：SSH 端口 %s → %s（过渡期保留 %s）%s\n' "${C_BLD}" "$(trim "$old_ports" | tr -s ' ')" "$new_port" "$(trim "$old_ports" | tr -s ' ')" "${C_RST}"
+    else
+      printf '  %s即将修改：SSH 端口 %s → %s%s\n' "${C_BLD}" "$(trim "$old_ports" | tr -s ' ')" "$new_port" "${C_RST}"
+    fi
+    if ! ask_yn "确认现在执行？" y; then
+      info "已取消，SSH 端口没有任何改动。"
+      return 0
+    fi
+    printf '\n'
+  fi
+
   # 本机防火墙放行
   info "检查本机防火墙…"
   if have ufw && ufw status 2>/dev/null | grep -q "^Status: active"; then
