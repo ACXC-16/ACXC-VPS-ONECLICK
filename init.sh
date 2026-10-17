@@ -2391,6 +2391,9 @@ enter_fullscreen() {
   [ "$TTY_OK" -eq 1 ] || return 0
   [ -n "${TERM:-}" ] || return 0
   [ "$ALT_SCREEN" -eq 1 ] && return 0
+  # 自己记下光标位置：有些终端（如 FinalShell）切备用屏幕后不会把光标放回原处，
+  # 不显式保存的话，退出时 shell 提示符会跑到屏幕中间的空白处。
+  printf '\033[s'
   printf '\033[?1049h'
   printf '\033[H'
   ALT_SCREEN=1
@@ -2401,6 +2404,9 @@ leave_fullscreen() {
   [ "$ALT_SCREEN" -eq 1 ] || return 0
   ALT_SCREEN=0
   printf '\033[?1049l'
+  printf '\033[0m'
+  # 回到进入脚本前的那一行，提示符就紧跟在 acxc 命令下面
+  printf '\033[u'
   return 0
 }
 
