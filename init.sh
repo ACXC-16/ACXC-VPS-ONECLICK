@@ -1587,20 +1587,20 @@ EOF
 }
 # ============ 步骤 3：安装常用工具 / BBR网络加速 / Swap ===================
 # 顺序按「使用人数 + 重要性」排；多选时编号之间要用空格隔开
-# 每组格式：包名|说明|是否推荐（y = 直接回车时会装上，只标 3 个）
+# 每组格式：包名|说明（写清"干什么 + 装什么"）|是否推荐（y = 直接回车时会装上，只标 3 个）
 TOOL_ITEMS=(
-  "curl wget ca-certificates gnupg|基础组件（下载 / 证书 / 密钥）|y"
-  "fail2ban|fail2ban 防 SSH 暴力破解|y"
-  "swap|创建 Swap 交换文件|y"
-  "ufw|安装 UFW 防火墙（自动先放行 SSH 端口）|n"
-  "htop tmux lsof|进程 / 会话 / 文件占用查看|n"
-  "vim nano|文本编辑器|n"
-  "git rsync unzip zip|同步 / 压缩打包|n"
-  "bash-completion|命令自动补全（Tab 补全更好用）|n"
-  "jq tree ncdu|查看 JSON / 目录树 / 磁盘占用|n"
-  "net-tools dnsutils mtr-tiny traceroute|网络诊断（排障用）|n"
+  "curl wget ca-certificates gnupg|下载与证书（curl wget GPG）|y"
+  "fail2ban|防 SSH 暴力破解（fail2ban）|y"
+  "swap|虚拟内存（Swap，小内存建议装）|y"
+  "ufw|防火墙（UFW，自动放行 SSH 端口）|n"
+  "htop tmux lsof|看进程 / 端口（htop tmux lsof）|n"
+  "vim nano|编辑文件（vim nano）|n"
+  "git rsync unzip zip|传文件 / 解压缩（git rsync zip）|n"
+  "bash-completion|Tab 命令补全（bash-completion）|n"
+  "jq tree ncdu|看目录 / 磁盘 / JSON（tree ncdu jq）|n"
+  "net-tools dnsutils mtr-tiny traceroute|网络排障（mtr ping 端口探测）|n"
   "timezone|设置时区（默认 Asia/Shanghai）|n"
-  "bbr|开启 BBR 网络加速|n"
+  "bbr|BBR 网络加速（提升网速）|n"
 )
 
 step_extras() {
@@ -1614,8 +1614,14 @@ step_extras() {
   done
 
   # 行名按显示宽度补齐（中文算 2 列），只算一次，保证 [推荐] 那一列是对齐的
+  local maxw=0
   for i in "${!g_title[@]}"; do
-    pad=$((32 - $(disp_width "${g_title[$i]}")))
+    local w; w=$(disp_width "${g_title[$i]}")
+    [ "$w" -gt "$maxw" ] && maxw="$w"
+  done
+  [ "$maxw" -lt 20 ] && maxw=20
+  for i in "${!g_title[@]}"; do
+    pad=$((maxw + 2 - $(disp_width "${g_title[$i]}")))
     [ "$pad" -lt 1 ] && pad=1
     g_label+=("$(printf '%s%*s' "${g_title[$i]}" "$pad" "")")
   done

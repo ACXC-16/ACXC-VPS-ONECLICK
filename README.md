@@ -71,18 +71,18 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
 
 ```
   可安装 / 可设置的项目：
-   1) 基础组件（下载 / 证书 / 密钥）   推荐
-   2) fail2ban 防 SSH 暴力破解         推荐
-   3) 创建 Swap 交换文件               推荐
-   4) 安装 UFW 防火墙（自动先放行 SSH 端口）
-   5) 进程 / 会话 / 文件占用查看
-   6) 文本编辑器
-   7) 同步 / 压缩打包
-   8) 命令自动补全（Tab 补全更好用）
-   9) 查看 JSON / 目录树 / 磁盘占用
-  10) 网络诊断（排障用）
+   1) 下载与证书（curl wget GPG）            推荐
+   2) 防 SSH 暴力破解（fail2ban）            推荐
+   3) 虚拟内存（Swap，小内存建议装）         推荐
+   4) 防火墙（UFW，自动放行 SSH 端口）
+   5) 看进程 / 端口（htop tmux lsof）
+   6) 编辑文件（vim nano）
+   7) 传文件 / 解压缩（git rsync zip）
+   8) Tab 命令补全（bash-completion）
+   9) 看目录 / 磁盘 / JSON（tree ncdu jq）
+  10) 网络排障（mtr ping 端口探测）
   11) 设置时区（默认 Asia/Shanghai）
-  12) 开启 BBR 网络加速
+  12) BBR 网络加速（提升网速）
    0) 返回主菜单
 
   多个编号之间要用空格隔开（例如：1 3 5）；直接回车＝只装标了「推荐」的项目；a＝全部

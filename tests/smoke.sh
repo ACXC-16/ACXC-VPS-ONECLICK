@@ -308,7 +308,7 @@ echo "== 18) 菜单 3 = 工具子选项：只装选中的那一组 =="
 CUR_OUT="$WORK/tools.out"
 rc="$(printf '3\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "工具子选项退出码" "0" "$rc"
-check_has "列出了子选项" "$CUR_OUT" "基础组件（下载 / 证书 / 密钥）"
+check_has "列出了子选项" "$CUR_OUT" "下载与证书"
 check_has "标了推荐项" "$CUR_OUT" "推荐"
 check_hasnt "不再打印「按需」字样" "$CUR_OUT" "按需"
 # shellcheck disable=SC2016  # 这里的正则要用单引号，避免被 shell 展开
