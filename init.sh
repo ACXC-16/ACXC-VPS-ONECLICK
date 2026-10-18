@@ -2107,6 +2107,7 @@ step_extras() {
       printf '\n'
       if ! ask_yn "确认执行以上操作？" y; then
         info "已取消，回到项目列表。"
+        refresh_screen
         continue
       fi
       printf '\n'
