@@ -49,14 +49,4 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
 - 回滚 SSH 配置：`cp -a /root/acxc-vps-backup/<时间戳>-ssh/. /etc/ssh/ && systemctl restart ssh`
 - 日志：`/var/log/acxc-vps.log`（菜单 `5) 查看运行日志`），卸载里可一键清掉。
 
-## 命令行用法
-
-```bash
-bash init.sh --yes                              # 无人值守（不会改 root 密码）
-bash init.sh --only sysupdate                   # 只跑某一步：sysupdate / access / extras
-bash init.sh --only access --port 2222 --password '你的密码'
-bash init.sh --dry-run                          # 演练，不改系统
-bash init.sh --help                             # 全部参数
-```
-
 只在 Ubuntu / Debian（含衍生版）测试过；其它发行版加 `--force`，风险自负。
