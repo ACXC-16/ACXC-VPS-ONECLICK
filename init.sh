@@ -103,6 +103,8 @@ SHORTCUT_NAME="acxc"
 SHORTCUT_VER_MARK="acxc-shortcut-ver: 2"
 # 1 = 只读配置文件、不跑 sshd -T（用于状态显示，避免启动变慢）
 CSP_FAST=0
+# 当前步骤的标题（供子菜单重画大图标时复用）
+CUR_STEP_TITLE=""
 CACHE_DIR="${ACXC_VPS_CACHE_DIR:-/usr/local/share/acxc}"
 
 # ============================== 输出与日志 ==================================
@@ -1895,7 +1897,13 @@ step_extras() {
   done
 
   # 外层循环：只选一项时，处理完回到本菜单；选两项以上或 a（全部）处理完回上级菜单
-  while :; do
+    local first_round=1
+    # 第二次及以后进来时补画大图标 + 步骤标题（第一次是 run_plan 画的）
+    while :; do
+      if [ "$first_round" -eq 0 ] && [ -n "${CUR_STEP_TITLE:-}" ]; then
+        screen_header "$CUR_STEP_TITLE"
+      fi
+      first_round=0
     printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
     for i in "${!g_title[@]}"; do
       if [ "${g_rec[$i]}" = y ]; then
@@ -2518,6 +2526,7 @@ status_ssh() {
   CSP_FAST=1
   p="$(trim "$(current_ssh_ports)")"
   CSP_FAST=0
+# 当前步骤的标题（供子菜单重画大图标时复用）
   [ -n "$p" ] || p="$(trim "$SSH_M_PORTS")"
   if [ -n "$p" ]; then
     printf '端口 %s' "$p"
@@ -3020,7 +3029,8 @@ confirm_plan() {
 run_plan() {
   local i=0 total=${#PLAN_SLUGS[@]} rc
   while [ "$i" -lt "$total" ]; do
-    screen_header "步骤 $((i + 1))/${total}：${PLAN_TITLES[$i]}"
+      CUR_STEP_TITLE="步骤 $((i + 1))/${total}：${PLAN_TITLES[$i]}"
+      screen_header "$CUR_STEP_TITLE"
     _log_raw STEP "开始：${PLAN_TITLES[$i]}（${PLAN_SLUGS[$i]}）"
     rc=0
     "${PLAN_FUNCS[$i]}" || rc=$?

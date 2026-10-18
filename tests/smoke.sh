@@ -867,6 +867,15 @@ check "关闭 SSH 端口退出码" "0" "$rc"
 check_has "提示这是 SSH 端口" "$CUR_OUT" "是当前 SSH 端口"
 check_hasnt "回答 n 后不会真去关" "$CUR_OUT" "ufw delete allow 22/tcp"
 
+echo "== 48) 单选处理完回到工具菜单时，大图标和步骤标题要重新出现 =="
+CUR_OUT="$WORK/header-again.out"
+rc="$(printf '3\n1\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "退出码" "0" "$rc"
+n="$(grep -c '步骤 1/1：安装常用工具' "$CUR_OUT")"
+check "步骤标题出现两次（进入 + 返回）" "2" "$n"
+n="$(grep -c '█████' "$CUR_OUT")"
+if [ "$n" -ge 10 ]; then ok "大图标至少出现 10 行（两次画面）"; else bad "大图标行数不足：$n"; fi
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="
