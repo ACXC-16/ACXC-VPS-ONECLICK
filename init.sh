@@ -35,13 +35,6 @@ REPO_SLUG="ACXC-16/ACXC-VPS-ONECLICK"
 DEFAULT_SSH_PORT="52052"
 # 菜单里选「使用默认设置」时用的 root 密码
 DEFAULT_ROOT_PASSWORD="acxc1616"
-# 旧版本（vps-init 前缀）留下的路径：升级时自动改名，见 migrate_legacy_paths
-LEGACY_SSHD_CONF="/etc/ssh/sshd_config.d/00-vps-init.conf"
-LEGACY_F2B_CONF="/etc/fail2ban/jail.d/vps-init.local"
-LEGACY_BBR_CONF="/etc/sysctl.d/99-vps-init-bbr.conf"
-LEGACY_SWAP_CONF="/etc/sysctl.d/99-vps-init-swap.conf"
-LEGACY_LOG="/var/log/vps-init.log"
-LEGACY_BACKUP_DIR="/root/vps-init-backup"
 
 MANAGED_SSHD_CONF="/etc/ssh/sshd_config.d/00-acxc-vps.conf"
 FAIL2BAN_CONF="/etc/fail2ban/jail.d/acxc-vps.local"
@@ -519,74 +512,18 @@ ssh_managed_keys() {
   return 0
 }
 
-# 把上次运行留下的受管设置读回来，避免只跑其中一个步骤时把另一个覆盖掉
-# ===================== 旧文件名迁移（vps-init → acxc-vps） ==================
-# 早期版本用的是 vps-init 前缀，升级后要把这些文件改名，否则会出现两份配置：
-# fail2ban 会因重复 jail 启动失败、sshd 会同时监听两个端口。
-migrate_legacy_paths() {
-  local moved=0 pair old new
-  local -a pairs=(
-    "${LEGACY_SSHD_CONF}|${MANAGED_SSHD_CONF}"
-    "${LEGACY_F2B_CONF}|${FAIL2BAN_CONF}"
-    "${LEGACY_BBR_CONF}|${SYSCTL_BBR_CONF}"
-    "${LEGACY_SWAP_CONF}|/etc/sysctl.d/99-acxc-vps-swap.conf"
-  )
-
-  # 日志：旧内容追加进新文件，然后删掉旧的，不丢历史
-  if [ -f "$LEGACY_LOG" ] && [ "$LEGACY_LOG" != "$LOG_FILE" ]; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-      info "[dry-run] 将把旧日志合并进 ${LOG_FILE} 并删除 ${LEGACY_LOG}"
-    elif cat "$LEGACY_LOG" >>"$LOG_FILE" 2>/dev/null; then
-      rm -f "$LEGACY_LOG" 2>/dev/null && info "旧日志已并入：${LEGACY_LOG} → ${LOG_FILE}"
-    fi
-  fi
-
-  for pair in "${pairs[@]}"; do
-    old="${pair%%|*}"; new="${pair#*|}"
-    [ "$old" = "$new" ] && continue
-    [ -e "$old" ] || continue
-    if [ -e "$new" ]; then
-      warn "发现旧文件 ${old}，而新文件 ${new} 已存在：请确认后手动删除旧文件（两个都生效可能冲突）"
-      continue
-    fi
-    if [ "$DRY_RUN" -eq 1 ]; then
-      info "[dry-run] 将把旧文件改名：${old} → ${new}"
-      continue
-    fi
-    if mv -f "$old" "$new" 2>/dev/null; then
-      # 文件里的旧标记/注释一起换掉（管理块标记必须换，否则读不回来）
-      sed -i 's/vps-init/acxc-vps/g' "$new" 2>/dev/null || true
-      info "旧文件已改名：${old} → ${new}"
-      moved=1
-    else
-      warn "旧文件改名失败：${old}（可手动执行 mv ${old} ${new}）"
-    fi
-  done
-
-  # 备份目录
-  if [ -d "$LEGACY_BACKUP_DIR" ] && [ ! -e /root/acxc-vps-backup ]; then
-    if [ "$DRY_RUN" -eq 1 ]; then
-      info "[dry-run] 将把旧备份目录改名：${LEGACY_BACKUP_DIR} → /root/acxc-vps-backup"
-    elif mv -f "$LEGACY_BACKUP_DIR" /root/acxc-vps-backup 2>/dev/null; then
-      info "旧备份目录已改名：${LEGACY_BACKUP_DIR} → /root/acxc-vps-backup"
-    fi
-  fi
-
-  [ "$moved" -eq 1 ] && invalidate_status
-  return 0
-}
 
 ssh_load_managed() {
   SSH_M_PORTS=""; SSH_M_PERMIT_ROOT_LOGIN=""; SSH_M_PASSWORD_AUTH=""
   local src="" parsed="" kind rest
   if [ -f "$MANAGED_SSHD_CONF" ]; then
     src="$MANAGED_SSHD_CONF"
-  elif [ -f /etc/ssh/sshd_config ] && grep -qE '(vps-init|acxc-vps) managed block: start' /etc/ssh/sshd_config 2>/dev/null; then
+  elif [ -f /etc/ssh/sshd_config ] && grep -qE 'acxc-vps managed block: start' /etc/ssh/sshd_config 2>/dev/null; then
     src="/etc/ssh/sshd_config"
   else
     return 0
   fi
-  parsed="$(sed -n -E '/# --- (vps-init|acxc-vps) managed block: start ---/,/# --- (vps-init|acxc-vps) managed block: end ---/p' "$src" 2>/dev/null |
+  parsed="$(sed -n -E '/# --- acxc-vps managed block: start ---/,/# --- acxc-vps managed block: end ---/p' "$src" 2>/dev/null |
     awk 'tolower($1)=="port"{printf "P %s\n", $2}
          tolower($1)=="permitrootlogin"{printf "R %s\n", $2}
          tolower($1)=="passwordauthentication"{printf "A %s\n", $2}')"
@@ -628,7 +565,7 @@ comment_out_main_key() { # $1=配置文件 $2=指令名（小写）
 remove_managed_inline_block() {
   local conf="$1"
   [ -f "$conf" ] || return 0
-  sed -i -E '/# --- (vps-init|acxc-vps) managed block: start ---/,/# --- (vps-init|acxc-vps) managed block: end ---/d' "$conf"
+  sed -i -E '/# --- acxc-vps managed block: start ---/,/# --- acxc-vps managed block: end ---/d' "$conf"
   return 0
 }
 
@@ -2395,14 +2332,11 @@ uninstall_shortcut() {
 }
 
 uninstall_log() {
-  local f=""
-  for f in "$LOG_FILE" "$LEGACY_LOG"; do
-    [ -n "$f" ] || continue
-    [ -f "$f" ] || continue
-    if ask_yn "删除日志文件 $f ？" y; then
-      run rm -f "$f" && { ok "已删除：$f"; }
+  if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+    if ask_yn "删除日志文件 $LOG_FILE ？" y; then
+      run rm -f "$LOG_FILE" && { ok "已删除：$LOG_FILE"; }
     fi
-  done
+  fi
   return 0
 }
 
@@ -3417,7 +3351,6 @@ main() {
   banner
   check_os
   export DEBIAN_FRONTEND=noninteractive
-  migrate_legacy_paths
   ssh_load_managed
   # 如果这次跑的是放了很久的本地缓存版，提醒一句（避免用着旧版还以为是最新）
   if [ -f "${CACHE_DIR}/acxc.sh" ] && [ -n "$(find "${CACHE_DIR}/acxc.sh" -mmin +1440 2>/dev/null)" ]; then

@@ -371,40 +371,6 @@ check_has "设置密码时当场显示密码" "$CUR_OUT" "root 密码已设置�
 check_has "显示的内容里带密码" "$CUR_OUT" "acxc1616"
 check_hasnt "明文密码不会写进日志文件" "$WORK/summary.log" "acxc1616"
 
-echo "== 22) 旧文件名迁移：vps-init → acxc-vps =="
-MIG="$WORK/mig"
-mkdir -p "$MIG/sshd" "$MIG/f2b" "$MIG/sysctl"
-cat >"$MIG/sshd/00-vps-init.conf" <<'EOF'
-# --- vps-init managed block: start ---
-Port 52052
-# --- vps-init managed block: end ---
-EOF
-printf '[sshd]\nenabled = true\n' >"$MIG/f2b/vps-init.local"
-printf 'net.ipv4.tcp_congestion_control = bbr\n' >"$MIG/sysctl/99-vps-init-bbr.conf"
-sed -e "s|/etc/ssh/sshd_config\.d|$MIG/sshd|g" \
-    -e "s|/etc/fail2ban/jail\.d|$MIG/f2b|g" \
-    -e "s|/etc/sysctl\.d|$MIG/sysctl|g" \
-    "$ROOT/init.sh" >"$WORK/init-mig.sh"
-{
-  printf 'DRY_RUN=0\nCOLOR_OFF=1\nLOG_FILE="%s/mig.log"\n' "$MIG"
-  # 迁移函数依赖这些路径常量，从打过补丁的副本里取出来
-  grep -E '^(LEGACY_|MANAGED_SSHD_CONF=|FAIL2BAN_CONF=|SYSCTL_BBR_CONF=)' "$WORK/init-mig.sh"
-  sed -n '/^migrate_legacy_paths() {/,/^}/p' "$WORK/init-mig.sh"
-  sed -n '/^invalidate_status() {/p' "$WORK/init-mig.sh"
-  printf 'migrate_legacy_paths\n'
-} >"$WORK/mig.sh"
-CUR_OUT="$WORK/mig.out"
-bash "$WORK/mig.sh" >"$CUR_OUT" 2>&1
-if [ -f "$MIG/sshd/00-acxc-vps.conf" ] && [ ! -f "$MIG/sshd/00-vps-init.conf" ]; then
-  ok "SSH 配置已改名"
-else
-  bad "SSH 配置没有改名"
-fi
-check_has "管理块标记也跟着换了" "$MIG/sshd/00-acxc-vps.conf" "acxc-vps managed block: start"
-check_hasnt "旧的标记已经不在了" "$MIG/sshd/00-acxc-vps.conf" "vps-init managed block"
-if [ -f "$MIG/f2b/acxc-vps.local" ] && [ ! -f "$MIG/f2b/vps-init.local" ]; then ok "fail2ban 配置已改名"; else bad "fail2ban 配置没有改名"; fi
-if [ -f "$MIG/sysctl/99-acxc-vps-bbr.conf" ] && [ ! -f "$MIG/sysctl/99-vps-init-bbr.conf" ]; then ok "BBR 配置已改名"; else bad "BBR 配置没有改名"; fi
-
 echo "== 23) 第 1 项：驱动 / 固件 / 内核 三个可选项 =="
 KSTUB="$WORK/kstub"
 mkdir -p "$KSTUB"
