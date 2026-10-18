@@ -2940,8 +2940,9 @@ refresh_screen() {
 }
 # ============================== 操作菜单 ====================================
 show_menu() {
-  # 上面一行提示：随时输入 acxc 就能回到这个界面
-  printf '  %s快捷按键：%sacxc%s（随时输入 acxc 可随时打开脚本）%s\n\n' "${C_DIM}" "${C_BLD}${C_GRN}" "${C_DIM}" "${C_RST}"
+  # 与「操作菜单」齐头：标签同色（青色加粗），acxc 绿色，其余白色
+  printf '%s快捷按键：%s%sacxc%s（随时输入 %sacxc%s 可重新打开管理面板）\n\n' \
+    "${C_BLD}${C_CYN}" "${C_RST}" "${C_GRN}" "${C_RST}" "${C_GRN}" "${C_RST}"
   printf '%s\n' "${C_BLD}${C_CYN}操作菜单${C_RST}"
   printf '  %s\n' "1) 更新内核 / 驱动 / 固件"
   printf '  %s\n' "2) 修改 root 密码 / SSH 端口"
