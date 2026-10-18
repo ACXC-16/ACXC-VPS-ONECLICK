@@ -3,14 +3,7 @@
 Ubuntu / Debian VPS 初始化：一个菜单搞定内核更新、改密码/端口、装工具、BBR、Swap。
 
 ```bash
-curl -fsSL --retry 3 -o /tmp/acxc.sh https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh && bash /tmp/acxc.sh
-```
-
-下载完整再执行（不会因网络中断跑半个脚本）。GitHub 连不上时用这两条之一：
-
-```bash
-curl -fsSL -o /tmp/acxc.sh https://cdn.jsdelivr.net/gh/ACXC-16/ACXC-VPS-ONECLICK@main/init.sh && bash /tmp/acxc.sh
-curl -fsSL -o /tmp/acxc.sh https://raw.githubusercontent.com/ACXC-16/ACXC-VPS-ONECLICK/main/init.sh && bash /tmp/acxc.sh
+curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh | bash
 ```
 
 首次运行会自动装好快捷命令，以后直接输入 **`acxc`**。
