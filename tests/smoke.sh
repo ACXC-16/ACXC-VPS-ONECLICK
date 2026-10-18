@@ -876,6 +876,29 @@ check "步骤标题出现两次（进入 + 返回）" "2" "$n"
 n="$(grep -c '█████' "$CUR_OUT")"
 if [ "$n" -ge 10 ]; then ok "大图标至少出现 10 行（两次画面）"; else bad "大图标行数不足：$n"; fi
 
+echo "== 49) 批量选择（a / 两项以上）不再逐项询问，直接全部安装 =="
+CUR_OUT="$WORK/batch-a.out"
+rc="$(printf '3\na\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "选 a 退出码" "0" "$rc"
+n="$(grep -c '请选择（回车' "$CUR_OUT" || true)"
+check "选 a 不出现逐项小菜单" "0" "$n"
+check_has "直接装了下载与证书" "$CUR_OUT" "[信息] 安装：下载与证书"
+check_has "批量模式跳过时区并说明" "$CUR_OUT" "批量模式跳过「设置时区」"
+
+CUR_OUT="$WORK/batch-two.out"
+rc="$(printf '3\n1 2\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+check "选两项退出码" "0" "$rc"
+n="$(grep -c '请选择（回车' "$CUR_OUT" || true)"
+check "选两项不出现逐项小菜单" "0" "$n"
+
+CUR_OUT="$WORK/batch-one.out"
+rc="$(printf '3\n1\n1\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+if grep -q '1) 安装' "$CUR_OUT" && grep -q '2) 卸载' "$CUR_OUT"; then
+  ok "单选仍然逐项询问"
+else
+  bad "单选没有询问（应询问）"
+fi
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "===== 失败项的输出（便于排查） ====="

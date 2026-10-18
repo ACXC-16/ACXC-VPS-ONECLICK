@@ -1419,7 +1419,7 @@ install_ufw() {
   [ -n "$ports" ] || ports="$(trim "$SSH_M_PORTS")"
   if [ -z "$ports" ]; then
     warn "读不到 SSH 端口，为避免被关在门外，已跳过启用（可以先跑第 2 项确认端口）"
-    return 1
+      return 0
   fi
   info "先放行 SSH 端口，再启用防火墙：$(trim "$ports" | tr -s ' ')"
 
@@ -1651,7 +1651,7 @@ enable_bbr() {
 
   if [ "$kmaj" -lt 4 ] || { [ "$kmaj" -eq 4 ] && [ "$kmin" -lt 9 ]; }; then
     warn "内核 ${kver} 低于 4.9，不支持 BBR，已跳过。"
-    return 1
+      return 0
   fi
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "${C_DIM}  [dry-run] 将写入 ${SYSCTL_BBR_CONF} 并执行 sysctl --system${C_RST}"
@@ -2069,16 +2069,24 @@ step_extras() {
     fi
 
     printf '\n'
+    # 一次选 2 项以上（含 a 全选）：直接按选择批量安装，不逐项询问
+    local batch=0
+    if [ "${#PLAN_TOOLS[@]}" -ge 2 ] || [ "$ASSUME_YES" -eq 1 ]; then batch=1; fi
     for i in "${PLAN_TOOLS[@]}"; do
       pkgs="${g_pkgs[$i]}"
       title="${g_title[$i]}"
       act=""
       case "$pkgs" in
         timezone)
+          # 批量模式（选 2 项以上 / a）没法替用户挑时区，跳过并说明
+          if [ "$batch" -eq 1 ]; then
+            info "批量模式跳过「设置时区」（需要单独选择）"
+            continue
+          fi
           set_timezone || rcp=1
           continue ;;
         fail2ban)
-          if [ "$ASSUME_YES" -eq 1 ]; then
+          if [ "$batch" -eq 1 ]; then
             step_fail2ban || rcp=1
             continue
           fi
@@ -2092,7 +2100,7 @@ step_extras() {
           esac
           continue ;;
         swap)
-          if [ "$ASSUME_YES" -eq 1 ]; then
+          if [ "$batch" -eq 1 ]; then
             setup_swap || rcp=1
             continue
           fi
@@ -2104,14 +2112,14 @@ step_extras() {
           esac
           continue ;;
         ufw)
-          if [ "$ASSUME_YES" -eq 1 ]; then
+          if [ "$batch" -eq 1 ]; then
             install_ufw || rcp=1
           else
             ufw_menu || rcp=1
           fi
           continue ;;
         bbr)
-          if [ "$ASSUME_YES" -eq 1 ]; then
+          if [ "$batch" -eq 1 ]; then
             enable_bbr || rcp=1
             continue
           fi
@@ -2124,7 +2132,7 @@ step_extras() {
           continue ;;
       esac
       # 普通软件包：安装 或 卸载
-      if [ "$ASSUME_YES" -eq 1 ]; then
+      if [ "$batch" -eq 1 ]; then
         act="i"
       else
         tool_pick_action "${title}（$(printf ''%s'' "$pkgs" | tr -s '' '')）" "安装" "卸载"
