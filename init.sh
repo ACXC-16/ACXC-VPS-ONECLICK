@@ -105,6 +105,7 @@ SHORTCUT_VER_MARK="acxc-shortcut-ver: 2"
 CSP_FAST=0
 # 当前步骤的标题（供子菜单重画大图标时复用）
 CUR_STEP_TITLE=""
+TOOL_INS_LOADED=0
 CACHE_DIR="${ACXC_VPS_CACHE_DIR:-/usr/local/share/acxc}"
 
 # ============================== 输出与日志 ==================================
@@ -1697,6 +1698,103 @@ TOOL_ITEMS=(
 )
 
 # ---------- 工具项：状态查询 / 开与关 / 安装与卸载 ----------
+# fail2ban 的 5 项小菜单：安装 / 启用 / 暂停 / 卸载 / 跳过
+fail2ban_enable() {
+  info "启用 fail2ban…"
+  if ! have fail2ban-client && ! have dpkg; then
+    warn "fail2ban 还没安装，先装一遍"
+    step_fail2ban || return 1
+  fi
+  run systemctl enable fail2ban || true
+  if run systemctl restart fail2ban; then
+    ok "fail2ban 已启用（$(fail2ban_state)）"
+  else
+    warn "启动失败，排查：journalctl -u fail2ban -n 50"
+    return 1
+  fi
+  return 0
+}
+
+fail2ban_remove() {
+  info "卸载 fail2ban…"
+  run systemctl stop fail2ban || true
+  run systemctl disable fail2ban || true
+  if [ -f "$FAIL2BAN_CONF" ]; then
+    run rm -f "$FAIL2BAN_CONF" || true
+  fi
+  if run env DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge fail2ban; then
+    ok "fail2ban 已卸载（配置也清掉了）"
+    return 0
+  fi
+  warn "卸载失败，可稍后手动执行：apt-get -y remove --purge fail2ban"
+  return 1
+}
+
+fail2ban_menu() {
+  local line=""
+  TOOL_ACT=""
+  printf '\n  %s防 SSH 爆破（fail2ban）%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(fail2ban_state)"
+  printf '   %s1)%s 安装（装完自动启用）\n' "${C_GRN}" "${C_RST}"
+  printf '   %s2)%s 启用（开机自启 + 立即启动）\n' "${C_GRN}" "${C_RST}"
+  printf '   %s3)%s 暂停（停止并取消开机自启，保留安装）\n' "${C_BLD}${C_YEL}" "${C_RST}"
+  printf '   %s4)%s 卸载（停止并卸载软件包）\n' "${C_BLD}${C_YEL}" "${C_RST}"
+  printf '   %s0)%s 跳过\n' "${C_DIM}" "${C_RST}"
+  while :; do
+    if ! read_line "请选择（回车=1）"; then return 0; fi
+    line="$(trim "$(menu_clean_input "$REPLY")")"
+    case "$line" in
+      ''|1) TOOL_ACT="install"; return 0 ;;
+      2) TOOL_ACT="enable"; return 0 ;;
+      3) TOOL_ACT="stop"; return 0 ;;
+      4) TOOL_ACT="remove"; return 0 ;;
+      0|q|Q) TOOL_ACT=""; return 0 ;;
+      *) warn "请输入 0 / 1 / 2 / 3 / 4" ;;
+    esac
+  done
+}
+
+# 工具项的当前状态（列表里显示用）：懒加载已安装包列表，只起一次 dpkg-query
+TOOL_INS_CACHE=""
+tool_ins_list() {
+  if [ -z "${TOOL_INS_CACHE:-}" ] && [ "${TOOL_INS_LOADED:-0}" -eq 0 ]; then
+    TOOL_INS_LOADED=1
+    if have dpkg-query; then
+      TOOL_INS_CACHE="$(dpkg-query -W -f='${Package} ${Status}\n' 2>/dev/null | awk '$NF=="installed"{printf " %s ", $1}')"
+    fi
+  fi
+  printf '%s' "${TOOL_INS_CACHE:-}"
+}
+
+tool_pkg_installed() { # $1=包名
+  case "$(tool_ins_list)" in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+tool_state() { # $1=索引 → 输出一句短状态（给列表用）
+  local pkgs="${g_pkgs[$1]}" tz="" miss=0 p="";
+  case "$pkgs" in
+    fail2ban)
+      case "$(fail2ban_state)" in
+        运行中) printf '运行中' ;;
+        *未运行*) printf '已停' ;;
+        *) printf '未装' ;;
+      esac; return 0 ;;
+    swap)
+      if [ "$(swap_total_mb)" -gt 0 ]; then printf '已启用'; else printf '未启用'; fi; return 0 ;;
+    ufw) ufw_state; return 0 ;;
+    bbr)
+      case "$(bbr_state)" in 已开启*) printf '已开' ;; *) printf '未开' ;; esac; return 0 ;;
+    timezone)
+      if [ -r /etc/timezone ]; then IFS= read -r tz </etc/timezone 2>/dev/null || tz=""; fi
+      printf '%s' "${tz:-未设置}"; return 0 ;;
+  esac
+  for p in $pkgs; do
+    tool_pkg_installed "$p" || miss=1
+  done
+  if [ "$miss" -eq 0 ]; then printf '已装'; else printf '未装'; fi
+}
 fail2ban_state() {
   if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
     printf '运行中'
@@ -1874,7 +1972,7 @@ tool_pkgs_remove() { # $1=标题 $2=包名
 }
 
 step_extras() {
-  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0 act=""
+  local i=0 raw="" line="" tok="" ok=1 rcp=0 pad=0 act="" mark=""
   local -a g_pkgs=() g_title=() g_rec=() g_label=()
   local entry pkgs="" title="" rec="" sel=""
 
@@ -1907,10 +2005,11 @@ step_extras() {
     printf '\n%s\n' "  ${C_BLD}可安装 / 可设置的项目：${C_RST}"
     for i in "${!g_title[@]}"; do
       if [ "${g_rec[$i]}" = y ]; then
-        printf '  %s%2d)%s %s %s推荐%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "${C_GRN}" "${C_RST}"
+        mark="${C_GRN}推荐${C_RST}  "
       else
-        printf '  %s%2d)%s %s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_title[$i]}"
+        mark="      "
       fi
+      printf '  %s%2d)%s %s%s%s%s%s\n' "${C_CYN}" "$((i + 1))" "${C_RST}" "${g_label[$i]}" "$mark" "${C_DIM}" "$(tool_state "$i")" "${C_RST}"
     done
     printf '  %s%2d)%s %s\n' "${C_DIM}" 0 "${C_RST}" "返回主菜单"
     printf '\n'
@@ -1970,7 +2069,6 @@ step_extras() {
     fi
 
     printf '\n'
-    printf '\n'
     for i in "${PLAN_TOOLS[@]}"; do
       pkgs="${g_pkgs[$i]}"
       title="${g_title[$i]}"
@@ -1980,17 +2078,29 @@ step_extras() {
           set_timezone || rcp=1
           continue ;;
         fail2ban)
-          [ "$ASSUME_YES" -eq 1 ] || tool_pick_action "防 SSH 爆破（fail2ban）　当前：$(fail2ban_state)" "安装并启用" "停止并禁用"; act="$TOOL_ACT"
-          case "$act" in
-            ''|i) step_fail2ban || rcp=1 ;;
-            u) fail2ban_disable || rcp=1 ;;
+          if [ "$ASSUME_YES" -eq 1 ]; then
+            step_fail2ban || rcp=1
+            continue
+          fi
+          fail2ban_menu
+          case "$TOOL_ACT" in
+            install) step_fail2ban || rcp=1 ;;
+            enable) fail2ban_enable || rcp=1 ;;
+            stop) fail2ban_disable || rcp=1 ;;
+            remove) fail2ban_remove || rcp=1 ;;
+            *) info "已跳过：${title}" ;;
           esac
           continue ;;
         swap)
-          [ "$ASSUME_YES" -eq 1 ] || tool_pick_action "虚拟内存（Swap）　当前：$(swap_state)" "创建并启用" "关闭并删除"; act="$TOOL_ACT"
-          case "$act" in
-            ''|i) setup_swap || rcp=1 ;;
+          if [ "$ASSUME_YES" -eq 1 ]; then
+            setup_swap || rcp=1
+            continue
+          fi
+          tool_pick_action "虚拟内存（Swap）　当前：$(swap_state)" "创建并启用" "关闭并删除"
+          case "$TOOL_ACT" in
+            i) setup_swap || rcp=1 ;;
             u) swap_disable || rcp=1 ;;
+            *) info "已跳过：${title}" ;;
           esac
           continue ;;
         ufw)
@@ -2001,10 +2111,15 @@ step_extras() {
           fi
           continue ;;
         bbr)
-          [ "$ASSUME_YES" -eq 1 ] || tool_pick_action "BBR 加速　当前：$(bbr_state)" "开启" "关闭"; act="$TOOL_ACT"
-          case "$act" in
-            ''|i) enable_bbr || rcp=1 ;;
+          if [ "$ASSUME_YES" -eq 1 ]; then
+            enable_bbr || rcp=1
+            continue
+          fi
+          tool_pick_action "BBR 加速　当前：$(bbr_state)" "开启" "关闭"
+          case "$TOOL_ACT" in
+            i) enable_bbr || rcp=1 ;;
             u) bbr_disable || rcp=1 ;;
+            *) info "已跳过：${title}" ;;
           esac
           continue ;;
       esac

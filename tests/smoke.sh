@@ -781,7 +781,7 @@ check_has "越界提示" "$CUR_OUT" "编号不对"
 
 echo "== 44) 卸载流程的确认项默认都是 Y =="
 # 卸载相关函数里不允许再出现默认 N
-bad_region="$(awk 'NR>=1930 && NR<=2110 && /ask_yn .*" n;/' "$ROOT/init.sh" | wc -l | tr -d ' ')"
+bad_region="$(awk '/^uninstall_configs\(\)/,/^}/' "$ROOT/init.sh" | grep -c 'ask_yn .*" n;' || true)"
 check "卸载流程里没有默认 N 的确认" "0" "$bad_region"
 check_has "卸载软件包默认 Y" "$ROOT/init.sh" 'ask_yn "确认卸载上面这些软件包？" y'
 check_has "卸载 fail2ban 包默认 Y" "$ROOT/init.sh" 'ask_yn "是否顺便卸载 fail2ban 软件包？" y'
@@ -829,7 +829,7 @@ check_has "卸载有结果提示" "$CUR_OUT" "已卸载：传文件 / 解压"
 
 # fail2ban：停止并禁用
 CUR_OUT="$WORK/ti-f2b-off.out"
-rc="$(printf '3\n2\n2\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n2\n3\n0\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "停用 fail2ban 退出码" "0" "$rc"
 check_has "会停掉 fail2ban" "$CUR_OUT" "systemctl stop fail2ban"
 check_has "停用提示" "$CUR_OUT" "已停止并禁用"
