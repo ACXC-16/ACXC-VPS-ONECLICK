@@ -68,6 +68,7 @@ OPT_PASSWORD=""
 GEN_PASSWORD=0
 NEW_ROOT_PASSWORD=""
 SSH_PORT_CHANGED=""
+KERNEL_RELEASE=""
 SSH_NEW_PORT=""
 SSH_KEEP_OLD=0
 SSH_OLD_PORTS=""
@@ -99,6 +100,9 @@ STEPS=(
 # 快捷命令：安装成 acxc，以后直接输入 acxc 就能打开
 SHORTCUT_DIR="${ACXC_VPS_SHORTCUT_DIR:-/usr/local/bin}"
 SHORTCUT_NAME="acxc"
+SHORTCUT_VER_MARK="acxc-shortcut-ver: 2"
+# 1 = 只读配置文件、不跑 sshd -T（用于状态显示，避免启动变慢）
+CSP_FAST=0
 CACHE_DIR="${ACXC_VPS_CACHE_DIR:-/usr/local/share/acxc}"
 
 # ============================== 输出与日志 ==================================
@@ -134,13 +138,14 @@ have()  { command -v "$1" >/dev/null 2>&1; }
 # 计算字符串在终端里占几列（用于把"项目 / 状态"两列对齐）
 # 纯 bash：函数内临时切到 C locale，用模式替换数出 ASCII 字节，再按 UTF-8 的
 # 3 字节 = 2 列折算中文/全角字符。不依赖本机 locale，也不起任何子进程。
+# 显示宽度（中文算 2 列）：结果放全局 DW，不用 $( ) 就不会起子 shell
+DW=0
 disp_width() {
-  local s="$1" save_lc="${LC_ALL-}" ascii="" n=0
+  local s="$1" save_lc="${LC_ALL-}" ascii=""
   LC_ALL=C
   ascii="${s//[! -~]/}"                      # 只留下 ASCII 可打印字符（含空格）
-  n=$(( ${#ascii} + ((${#s} - ${#ascii}) / 3) * 2 ))
+  DW=$(( ${#ascii} + ((${#s} - ${#ascii}) / 3) * 2 ))
   if [ -n "$save_lc" ]; then LC_ALL="$save_lc"; else unset LC_ALL; fi
-  printf '%s' "$n"
 }
 
 # 去掉字符串首尾空白
@@ -378,14 +383,53 @@ sshd_effective() { # 输出 sshd -T 的结果（失败则为空）
   "$b" -T -f /etc/ssh/sshd_config 2>/dev/null
 }
 
-current_ssh_ports() { # 输出当前生效的端口（空格分隔，无首尾空白）
+current_ssh_ports() { # 输出当前生效端口；CSP_FAST=1 时只读配置文件、不跑 sshd -T（状态显示用）
+  local out="" line="" f=""
+  if [ -n "${SSH_M_PORTS:-}" ]; then printf '%s' "$SSH_M_PORTS"; return 0; fi
+  # 1) 受管 drop-in（纯 bash 读，零进程）
+  if [ -r "$MANAGED_SSHD_CONF" ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        Port[[:space:]]*|Port)
+          line="${line#Port}"; line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          case "$line" in ''|*[!0-9]*) ;; *) out="${out}${out:+ }${line}" ;; esac ;;
+      esac
+    done <"$MANAGED_SSHD_CONF" 2>/dev/null
+  fi
+  if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+  # 2) 主配置（纯 bash 读）
+  if [ -r /etc/ssh/sshd_config ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        Port[[:space:]]*|Port)
+          line="${line#Port}"; line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          case "$line" in ''|*[!0-9]*) ;; *) out="${out}${out:+ }${line}" ;; esac ;;
+      esac
+    done </etc/ssh/sshd_config 2>/dev/null
+  fi
+  if [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+  if [ "${CSP_FAST:-0}" = "1" ]; then return 0; fi
+  # 3) 兜底：真正问一次 sshd（慢，但最准）
   local eff=""
   eff="$(sshd_effective)" || true
   if [ -n "$eff" ]; then
     printf '%s' "$(printf '%s\n' "$eff" | awk '/^port /{printf "%s", (n++ ? " " : "") $2}')"
     return 0
   fi
-  awk '/^[[:space:]]*Port[[:space:]]/{printf "%s", (n++ ? " " : "") $2}' /etc/ssh/sshd_config 2>/dev/null
+  for f in /etc/ssh/sshd_config.d/*.conf; do
+    [ -r "$f" ] || continue
+    while IFS= read -r line; do
+      case "$line" in
+        Port[[:space:]]*|Port)
+          line="${line#Port}"; line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          case "$line" in ''|*[!0-9]*) ;; *) out="${out}${out:+ }${line}" ;; esac ;;
+      esac
+    done <"$f" 2>/dev/null
+  done
+  printf '%s' "$out"
   return 0
 }
 
@@ -752,7 +796,7 @@ step_sysupdate() {
   # 组名按显示宽度补齐（中文算 2 列），只算一次
   local -a g_label=()
   for p in "${g_names[@]}"; do
-    local gp=$((34 - $(disp_width "$p")))
+    disp_width "$p"; local gp=$((34 - DW))
     [ "$gp" -lt 1 ] && gp=1
     g_label+=("$(printf '%s%*s' "$p" "$gp" "")")
   done
@@ -1189,11 +1233,12 @@ step_access() {
     ssh_ask_port || rc=1
     passwd_ask || rc=1
     if [ -n "$SSH_NEW_PORT" ]; then
-      if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
-        mark_port_changed
-      else
-        rc=1
-      fi
+        ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"
+        case $? in
+          0) mark_port_changed ;;
+          2) info "SSH 端口保持原样。" ;;
+          *) rc=1 ;;
+        esac
     fi
     if [ -n "$PASSWD_NEW" ]; then
       passwd_apply "$PASSWD_NEW" "$PASSWD_GEN" || rc=1
@@ -1243,11 +1288,12 @@ step_access() {
   # ---------- 2) SSH 端口 ----------
   printf '\n%s\n' "  ${C_BLD}第二步：修改 SSH 端口${C_RST}"
   if ssh_ask_port; then
-    if ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"; then
-      mark_port_changed
-    else
-      rc=1
-    fi
+    ssh_apply_port "$SSH_NEW_PORT" "$SSH_KEEP_OLD"
+    case $? in
+      0) mark_port_changed ;;
+      2) info "SSH 端口保持原样。" ;;
+      *) rc=1 ;;
+    esac
   else
     warn "已跳过 SSH 端口修改。"
   fi
@@ -1694,8 +1740,10 @@ swap_disable() {
 }
 
 bbr_state() {
-  local cc
-  cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+  local cc=""
+  if [ -r /proc/sys/net/ipv4/tcp_congestion_control ]; then
+    if IFS= read -r cc </proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null; then :; fi
+  fi
   if [ "$cc" = "bbr" ]; then printf '已开启'; else printf '未开启（%s）' "${cc:-未知}"; fi
 }
 
@@ -1836,12 +1884,12 @@ step_extras() {
   # 行名按显示宽度补齐（中文算 2 列），只算一次，保证 [推荐] 那一列是对齐的
   local maxw=0
   for i in "${!g_title[@]}"; do
-    local w; w=$(disp_width "${g_title[$i]}")
+    local w; disp_width "${g_title[$i]}"; w=$DW
     [ "$w" -gt "$maxw" ] && maxw="$w"
   done
   [ "$maxw" -lt 20 ] && maxw=20
   for i in "${!g_title[@]}"; do
-    pad=$((maxw + 2 - $(disp_width "${g_title[$i]}")))
+    disp_width "${g_title[$i]}"; pad=$((maxw + 2 - DW))
     [ "$pad" -lt 1 ] && pad=1
     g_label+=("$(printf '%s%*s' "${g_title[$i]}" "$pad" "")")
   done
@@ -2003,6 +2051,7 @@ shortcut_body() {
   cat <<EOF
 #!/bin/sh
 # ACXC16-VPS新机一键脚本 的快捷命令（自动生成；删除本文件即可取消快捷方式）
+# acxc-shortcut-ver: 2
 URL="https://github.com/${REPO_SLUG}/releases/latest/download/init.sh"
 CACHE="${CACHE_DIR}/acxc.sh"
 
@@ -2033,6 +2082,29 @@ install_shortcut() { # $1=quiet：自动安装时用，没变化就完全不说�
   if ! mkdir -p "$SHORTCUT_DIR" "$CACHE_DIR" 2>/dev/null; then
     warn "无法创建目录：$SHORTCUT_DIR（需要 root 权限）"
     return 1
+  fi
+  # 快速判断：内容关键行都在 → 直接跳过（不建临时文件、不跑 cmp/cat）
+  if [ -f "$target" ]; then
+    local content=""
+    content="$(< "$target")"
+    if [ -n "$content" ]; then
+      case "$content" in ''#!/bin/sh''*) ;; *) content="" ;; esac
+    fi
+    if [ -n "$content" ]; then
+      case "$content" in *"$SHORTCUT_VER_MARK"*) ;; *) content="" ;; esac
+    fi
+    if [ -n "$content" ]; then
+      # shellcheck disable=SC2016  # 这里是字面量，就是要匹配包装脚本里那行
+      case "$content" in *'exec bash "$CACHE"'*) ;; *) content="" ;; esac
+    fi
+    if [ -n "$content" ]; then
+      src="${BASH_SOURCE[0]:-}"
+      if [ -n "$src" ] && [ -r "$src" ] && [ "$src" != "${CACHE_DIR}/acxc.sh" ] && [ ! -f "${CACHE_DIR}/acxc.sh" ]; then
+        cp -f "$src" "${CACHE_DIR}/acxc.sh" 2>/dev/null || true
+      fi
+      if [ -z "$quiet" ]; then ok "快捷命令已是最新：${target}"; fi
+      return 0
+    fi
   fi
   tmp="$(mktemp)" || return 1
   shortcut_body >"$tmp"
@@ -2405,17 +2477,34 @@ tools_installed_count() { # "9/10"
   printf '%s/%s' "$n" "$total"
 }
 
-swap_total_mb() {
-  local mb=""
-  mb="$(awk '/^SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
-  case "$mb" in ''|*[!0-9]*) mb=0 ;; esac
-  printf '%s' "$mb"
+swap_total_mb() { # 纯 bash 读 /proc/meminfo，不起进程
+  local line="" v=""
+  if [ -r /proc/meminfo ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        SwapTotal:*) v="${line#SwapTotal:}"; break ;;
+      esac
+    done </proc/meminfo 2>/dev/null
+  fi
+  v="${v// /}"
+  v="${v%%[!0-9]*}"
+  case "$v" in ''|*[!0-9]*) v=0 ;; esac
+  printf '%s' $((v / 1024))
 }
 
-status_kernel() { # 只用本地命令：当前内核 + 是否装了更新的内核
-  local running="" newest="" out=""
-  running="$(uname -r)"
-  newest="$(installed_kernel_pkgs 2>/dev/null | grep -E '^linux-image-[0-9]' | sed -e 's|^linux-image-||' | sort -V | tail -n 1)"
+status_kernel() { # 当前内核 + 是否装了更新的内核（尽量不起进程）
+  local running="${KERNEL_RELEASE:-}" newest="" out="" f="" list=""
+  if [ -z "$running" ]; then running="$(uname -r)"; fi
+  for f in /boot/vmlinuz-[0-9]*; do
+    [ -e "$f" ] || continue
+    list="${list}${list:+
+}${f##*/vmlinuz-}"
+  done
+  if [ -n "$list" ]; then
+    newest="$(printf '%s\n' "$list" | sort -V 2>/dev/null | tail -n 1)"
+  else
+    newest="$(dpkg-query -W -f='${Package}\n' 'linux-image-[0-9]*' 2>/dev/null | sed -e 's|^linux-image-||' | sort -V 2>/dev/null | tail -n 1)"
+  fi
   if [ -n "$newest" ] && [ "$newest" != "$running" ]; then
     out="${running} → ${newest}（重启后生效）"
   else
@@ -2426,7 +2515,9 @@ status_kernel() { # 只用本地命令：当前内核 + 是否装了更新的内
 
 status_ssh() {
   local p=""
+  CSP_FAST=1
   p="$(trim "$(current_ssh_ports)")"
+  CSP_FAST=0
   [ -n "$p" ] || p="$(trim "$SSH_M_PORTS")"
   if [ -n "$p" ]; then
     printf '端口 %s' "$p"
@@ -2449,25 +2540,40 @@ status_passwd() {
 }
 
 status_extras() {
-  local out="" sw="" cc="" gb=""
+  local out="" sw="" cc="" gb="" line="" st_f2b="" st_ufw="" asked=0
   out="工具 $(tools_installed_count)"
-  if have fail2ban-client; then
-    if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then
-      out="${out} · fail2ban 运行中"
-    else
-      out="${out} · fail2ban 已停"
-    fi
+  # 一次 systemctl 问出两个服务的状态，省一次进程启动
+  if have systemctl; then
+    asked=1
+    while IFS= read -r line; do
+      case "$line" in
+        fail2ban|fail2ban.service) st_f2b="$line" ;;
+        ufw|ufw.service) st_ufw="$line" ;;
+      esac
+    done < <(systemctl is-active fail2ban ufw 2>/dev/null)
+  fi
+  if [ "$asked" -eq 0 ]; then
+    if have systemctl && systemctl is-active fail2ban >/dev/null 2>&1; then st_f2b="active"; fi
+    if have systemctl && systemctl is-active ufw >/dev/null 2>&1; then st_ufw="active"; fi
+  fi
+  if have fail2ban-client || [ -n "$st_f2b" ]; then
+    case "$st_f2b" in
+      active|activating) out="${out} · fail2ban 运行中" ;;
+      *) out="${out} · fail2ban 已停" ;;
+    esac
   else
     out="${out} · fail2ban 未装"
   fi
   if have ufw; then
-    if have systemctl && systemctl is-active ufw >/dev/null 2>&1; then
-      out="${out} · ufw 开"
-    elif [ "$DRY_RUN" -eq 0 ] && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
-      out="${out} · ufw 开"
-    else
-      out="${out} · ufw 关"
-    fi
+    case "$st_ufw" in
+      active|activating) out="${out} · ufw 开" ;;
+      *)
+        if [ "$DRY_RUN" -eq 0 ] && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
+          out="${out} · ufw 开"
+        else
+          out="${out} · ufw 关"
+        fi ;;
+    esac
   fi
   sw="$(swap_total_mb)"
   if [ "$sw" -gt 0 ]; then
@@ -2480,7 +2586,9 @@ status_extras() {
   else
     out="${out} · 无 Swap"
   fi
-  cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+  if [ -r /proc/sys/net/ipv4/tcp_congestion_control ]; then
+    if IFS= read -r cc </proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null; then :; fi
+  fi
   if [ "$cc" = "bbr" ]; then out="${out} · BBR 开"; else out="${out} · BBR 关"; fi
   printf '%s' "$out"
 }
@@ -2547,15 +2655,17 @@ show_status_table() {
     statuses+=("$(status_of "$slug")")
   done
   for title in "${labels[@]}"; do
-    w="$(disp_width "$title")"
+    disp_width "$title"; w=$DW
     [ "$w" -gt "$maxw" ] && maxw="$w"
   done
   for line in "${statuses[@]}"; do
-    w="$(disp_width "$line")"
+    disp_width "$line"; w=$DW
     [ "$w" -gt "$statw" ] && statw="$w"
   done
   for title in "${labels[@]}"; do
-    pads+=("$(printf '%s%*s' "$title" "$((maxw - $(disp_width "$title")))" "")")
+    disp_width "$title"; padn=$((maxw - DW)); [ "$padn" -lt 1 ] && padn=1
+    printf -v padstr '%*s' "$padn" ""
+    pads+=("${title}${padstr}")
   done
 
   build_banner
@@ -2697,10 +2807,10 @@ show_log_tail() { # 看最近的日志
 
 # 端口跟当前一样就不算"改动"（避免误报"本次设置"）
 mark_port_changed() {
-  local cur=""
-  cur="$(trim "$(current_ssh_ports)")"
-  case " $cur " in
-    *" $SSH_NEW_PORT "*) return 0 ;;
+  [ -n "${SSH_NEW_PORT:-}" ] || return 0
+  # 和"改之前"的端口比：改完后 current_ssh_ports 已经是新端口了，不能拿它判断
+  case " ${SSH_OLD_PORTS:-} " in
+    *" $SSH_NEW_PORT "*) return 0 ;;   # 原来就是这个端口，不算改动
   esac
   SSH_PORT_CHANGED="$SSH_NEW_PORT"
   return 0
