@@ -10,27 +10,18 @@ permissions:
 
 jobs:
   test:
-    name: 语法检查 / 冒烟测试 / ShellCheck
+    name: 检查与测试
     runs-on: ubuntu-24.04
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: 显示运行环境
+      - name: 语法 + ShellCheck
         run: |
-          bash --version | head -n 1
-          cat /etc/os-release | head -n 2
+          bash -n init.sh tests/smoke.sh tests/audit.sh
+          shellcheck --severity=warning init.sh tests/smoke.sh tests/audit.sh
 
-      - name: bash 语法检查
-        run: |
-          bash -n init.sh
-          bash -n tests/smoke.sh
-
-      - name: ShellCheck 静态检查（warning 及以上）
-        run: shellcheck --severity=warning init.sh tests/smoke.sh
-
-      - name: 冒烟测试（全部在 --dry-run 下执行，不改系统）
+      - name: 冒烟测试
         run: bash tests/smoke.sh
 
-      - name: 全路径自检（每个菜单入口 / 每个参数都跑一遍）
+      - name: 全路径自检
         run: bash tests/audit.sh

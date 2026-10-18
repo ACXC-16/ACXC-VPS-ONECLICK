@@ -1,7 +1,6 @@
 name: Release
 
-# 打 tag（形如 v1.0.0）时自动发布：先跑测试，再创建 Release 并把脚本作为附件传上去。
-# 发布后稳定下载地址（永远指向最新 Release）：
+# 打 v* 标签时自动发布（先测试，通过才发）。稳定下载地址：
 #   https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh
 on:
   push:
@@ -16,28 +15,21 @@ jobs:
     name: 测试并发布
     runs-on: ubuntu-24.04
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: 发布前必须通过测试（不然不发）
+      - name: 测试（不通过就不发）
         run: |
           bash -n init.sh
-          bash -n tests/smoke.sh
-          shellcheck --severity=warning init.sh tests/smoke.sh
+          shellcheck --severity=warning init.sh
           bash tests/smoke.sh
 
-      - name: 准备发布文件（额外留一份带版本号的副本）
-        run: |
-          cp init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh"
-          sha256sum init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh" | tee SHA256SUMS.txt
-
-      - name: 创建 GitHub Release
+      - name: 发布
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cp init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh"
+          sha256sum init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh" > SHA256SUMS.txt
           gh release create "${GITHUB_REF_NAME}" \
-            init.sh \
-            "VPS-acxc16-${GITHUB_REF_NAME}.sh" \
-            SHA256SUMS.txt \
+            init.sh "VPS-acxc16-${GITHUB_REF_NAME}.sh" SHA256SUMS.txt \
             --title "ACXC16-VPS新机一键脚本 ${GITHUB_REF_NAME}" \
             --generate-notes
