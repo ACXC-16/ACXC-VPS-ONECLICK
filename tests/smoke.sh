@@ -734,31 +734,25 @@ echo "== 41) acxc 快捷命令：缓存超过 1 小时就在后台刷新 =="
 check_has "包装脚本用 1 小时阈值" "$SCDIR/acxc" "mmin +60"
 check_has "包装脚本仍优先用缓存秒开" "$SCDIR/acxc" "exec bash \"\$CACHE\""
 
-echo "== 42) 备用屏幕：退出后终端还原成运行前的样子（脚本界面不留）=="
+echo "== 42) 不发任何备用屏幕 / DSR 序列（避免终端把回复打成 ^[[13;1R 这类乱码）=="
 CUR_OUT="$WORK/altscreen.out"
-rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm ACXC_VPS_START_ROW=7 run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
+rc="$(printf '0\n' | PATH="$STUBL:$PATH" TERM=xterm run_case "$CUR_OUT" "$WORK/init-tty.sh" --force --dry-run)"
 check "退出码" "0" "$rc"
-if grep -q '?1049h' "$CUR_OUT"; then ok "进入时切到备用屏幕"; else bad "没有进入备用屏幕"; fi
-if grep -q '?1049l' "$CUR_OUT"; then ok "退出时还原原屏幕"; else bad "退出时没有还原屏幕"; fi
-# 还原必须发生在退出那一刻（在最后一次菜单之后）
-line_h="$(grep -n '?1049h' "$CUR_OUT" | head -n 1 | cut -d: -f1)"
-line_l="$(grep -n '?1049l' "$CUR_OUT" | tail -n 1 | cut -d: -f1)"
-line_menu="$(grep -n '0) 退出' "$CUR_OUT" | tail -n 1 | cut -d: -f1)"
-if [ -n "$line_h" ] && [ -n "$line_l" ] && [ -n "$line_menu" ] && [ "$line_h" -lt "$line_menu" ] && [ "$line_menu" -lt "$line_l" ]; then
-  ok "顺序正确：进入(${line_h}) → 菜单(${line_menu}) → 还原(${line_l})"
-else
-  bad "顺序不对（进入=$line_h 菜单=$line_menu 还原=$line_l）"
-fi
+check_hasnt "不发 DSR 询问" "$CUR_OUT" "?6n"
+check_hasnt "不切备用屏幕" "$CUR_OUT" "?1049"
+check_hasnt "不保存/恢复光标" "$CUR_OUT" "[s"
+check_hasnt "不按行定位光标" "$CUR_OUT" ";1H"
+check_has "菜单照常显示" "$CUR_OUT" "操作菜单"
 
 CUR_OUT="$WORK/altscreen-off.out"
 rc="$(run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run --yes --only sysupdate)"
 check "无人值守退出码" "0" "$rc"
 check_hasnt "无人值守不切备用屏幕（输出留在正常屏幕）" "$CUR_OUT" "?1049"
 # 光标位置必须显式保存 / 恢复，否则有些终端退出后提示符会跑到屏幕中间
-check_has "进备用屏幕前保存光标位置" "$ROOT/init.sh" "printf '\033[s'"
-check_has "退出后精确回到起始行" "$ROOT/init.sh" "[%s;1H"
-check_hasnt "不再依赖 DECRC 复位光标" "$ROOT/init.sh" "printf '\033[u'"
-check_has "退出后复位颜色" "$ROOT/init.sh" "printf '\033[0m'"
+check_hasnt "代码里没有备用屏幕逻辑" "$ROOT/init.sh" "?1049h"
+check_hasnt "代码里不再按行定位光标" "$ROOT/init.sh" "[%s;1H"
+check_hasnt "代码里没有 DSR 询问" "$ROOT/init.sh" "\033[6n"
+ok "跳过颜色复位检查（已无备用屏幕）"
 
 echo "== 43) 输入不合法时就地重问：菜单/列表不重复出现 =="
 CUR_OUT="$WORK/invalid-main.out"
