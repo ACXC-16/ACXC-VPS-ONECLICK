@@ -6,7 +6,7 @@ Ubuntu / Debian VPS 初始化：一个菜单搞定内核更新、改密码/端�
 curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh | bash
 ```
 
-首次运行会自动装好快捷命令，以后直接输入 **`acxc`**（走本地缓存，秒开）。
+首次运行会自动装好快捷命令，以后直接输入 **`acxc`**。
 
 ## 菜单
 
