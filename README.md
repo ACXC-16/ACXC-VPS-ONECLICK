@@ -29,7 +29,7 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
 | # | 名字 | 内容 |
 | --- | --- | --- |
 | 1 | 下载与证书 | `curl` `wget` `ca-certificates` `gnupg` |
-| 2 | 防 SSH 爆破 | `fail2ban`（安装 / 启用 / 暂停 / 卸载） |
+| 2 | 防 SSH 爆破 | `fail2ban`（安装并启动 / 启用 / 暂停 / 卸载） |
 | 3 | 加虚拟内存 | `/swapfile` + fstab（开启 / 关闭） |
 | 4 | 防火墙 | `ufw`：安装启用 / 放行端口 / 关闭端口 |
 | 5 | 进程 / 端口 | `htop` `tmux` `lsof` |

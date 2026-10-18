@@ -1670,11 +1670,11 @@ fail2ban_remove() {
 fail2ban_menu() {
   local line=""
   TOOL_ACT=""
-  printf '\n  %s防 SSH 爆破（fail2ban）%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(fail2ban_state)"
-  printf '   %s1)%s 安装（装完自动启用）\n' "${C_GRN}" "${C_RST}"
-  printf '   %s2)%s 启用（开机自启 + 立即启动）\n' "${C_GRN}" "${C_RST}"
-  printf '   %s3)%s 暂停（停止并取消开机自启，保留安装）\n' "${C_BLD}${C_YEL}" "${C_RST}"
-  printf '   %s4)%s 卸载（停止并卸载软件包）\n' "${C_BLD}${C_YEL}" "${C_RST}"
+  printf '\n  %s防 SSH 爆破%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(fail2ban_state)"
+  printf '   %s1)%s 安装并启动\n' "${C_GRN}" "${C_RST}"
+  printf '   %s2)%s 启用\n' "${C_GRN}" "${C_RST}"
+  printf '   %s3)%s 暂停\n' "${C_BLD}${C_YEL}" "${C_RST}"
+  printf '   %s4)%s 卸载\n' "${C_BLD}${C_YEL}" "${C_RST}"
   printf '   %s0)%s 跳过\n' "${C_DIM}" "${C_RST}"
   while :; do
     if ! read_line "请选择（回车=1）"; then return 0; fi
@@ -1781,7 +1781,7 @@ bbr_state() {
   if [ -r /proc/sys/net/ipv4/tcp_congestion_control ]; then
     if IFS= read -r cc </proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null; then :; fi
   fi
-  if [ "$cc" = "bbr" ]; then printf '已开启'; else printf '未开启（%s）' "${cc:-未知}"; fi
+  if [ "$cc" = "bbr" ]; then printf '已开启'; else printf '未开启'; fi
 }
 
 bbr_disable() {
@@ -1837,8 +1837,8 @@ ufw_port_helper() { # $1=1 放行 / 2 关闭
 
 ufw_menu() {
   local line="" rc=0
-  printf '\n  %s防火墙（UFW）%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(ufw_state)"
-  printf '   %s1)%s 安装并启用（自动先放行 SSH 端口）\n' "${C_GRN}" "${C_RST}"
+  printf '\n  %s防火墙%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(ufw_state)"
+  printf '   %s1)%s 安装并启用\n' "${C_GRN}" "${C_RST}"
   printf '   %s2)%s 放行某个端口\n' "${C_GRN}" "${C_RST}"
   printf '   %s3)%s 关闭某个端口\n' "${C_GRN}" "${C_RST}"
   printf '   %s0)%s 跳过\n' "${C_DIM}" "${C_RST}"
@@ -2041,7 +2041,7 @@ step_extras() {
             setup_swap || rcp=1
             continue
           fi
-          tool_pick_action "虚拟内存（Swap）　当前：$(swap_state)" "创建并启用" "关闭并删除"
+          tool_pick_action "虚拟内存　当前：$(swap_state)" "创建并启用" "关闭并删除"
           case "$TOOL_ACT" in
             i) setup_swap || rcp=1 ;;
             u) swap_disable || rcp=1 ;;
@@ -2072,7 +2072,7 @@ step_extras() {
       if [ "$batch" -eq 1 ]; then
         act="i"
       else
-        tool_pick_action "${title}（$(printf ''%s'' "$pkgs" | tr -s '' '')）" "安装" "卸载"
+        tool_pick_action "${title}" "安装" "卸载"
         act="$TOOL_ACT"
       fi
       case "$act" in
