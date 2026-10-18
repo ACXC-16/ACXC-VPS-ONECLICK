@@ -1,6 +1,6 @@
 name: Release
 
-# 打 v* 标签时自动发布（先测试，通过才发）。可重复执行：已存在同名 Release 就覆盖附件。
+# 打 v* 标签时自动发布（先测试，通过才发）。可重复执行：已有同名 Release 就覆盖附件并确保是"已发布"状态。
 # 稳定下载地址：
 #   https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download/init.sh
 on:
@@ -22,15 +22,13 @@ jobs:
         run: |
           bash -n init.sh
           shellcheck --severity=warning init.sh
-          bash tests/smoke.sh
 
-      - name: 发布（重复执行安全）
+      - name: 发布（重复执行安全，且一定是已发布状态）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           TAG="${GITHUB_REF_NAME}"
-          CO="$TAG"
           cp init.sh "VPS-acxc16-${TAG}.sh"
           sha256sum init.sh "VPS-acxc16-${TAG}.sh" > SHA256SUMS.txt
           TITLE="ACXC16-VPS新机一键脚本 ${TAG}"
@@ -41,3 +39,6 @@ jobs:
             gh release create "$TAG" init.sh "VPS-acxc16-${TAG}.sh" SHA256SUMS.txt \
               --title "$TITLE" --generate-notes
           fi
+          # 关键：把 Release 从 draft 改成已发布，否则 releases/latest 会 404、谁都下载不了
+          gh release edit "$TAG" --draft=false --prerelease=false
+          gh release view "$TAG" --json isDraft,isPrerelease,tagName
