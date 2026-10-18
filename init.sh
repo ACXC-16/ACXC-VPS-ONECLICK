@@ -1709,6 +1709,32 @@ tool_pkg_installed() { # $1=包名
   return 1
 }
 
+plan_line_text() { # $1=索引 $2=选择 → 汇总里显示的一行
+  local i="$1" act="$2" pkgs="${g_pkgs[$1]}"
+  case "$pkgs" in
+    timezone) printf '跳过（时区需单独设置）'; return 0 ;;
+    ufw)
+      case "$act" in
+        install) printf '安装并启用' ;;
+        allow:*) printf '放行端口 %s' "${act#allow:}" ;;
+        close:*) printf '关闭端口 %s' "${act#close:}" ;;
+        *) printf '跳过' ;;
+      esac; return 0 ;;
+    fail2ban)
+      case "$act" in
+        install) printf '安装并启动' ;;
+        enable) printf '启用' ;;
+        stop) printf '暂停' ;;
+        remove) printf '卸载' ;;
+        *) printf '跳过' ;;
+      esac; return 0 ;;
+  esac
+  case "$act" in
+    i) printf '安装' ;;
+    u) printf '卸载' ;;
+    *) printf '跳过' ;;
+  esac
+}
 tool_plan_line() { # $1=索引 → 批量执行时该项目要做什么（汇总清单用）
   local pkgs="${g_pkgs[$1]}" miss=0 p=""
   case "$pkgs" in
@@ -1820,7 +1846,7 @@ ufw_state() {
   esac
 }
 
-ufw_port_helper() { # $1=1 放行 / 2 关闭
+ufw_port_helper() { # $1=1 放行 / 2 关闭（先问端口再执行）
   local port="" act="$1"
   if ! ask_value "请输入端口号" ""; then return 0; fi
   port="$(trim "$REPLY")"
@@ -1829,6 +1855,11 @@ ufw_port_helper() { # $1=1 放行 / 2 关闭
     return 1
   fi
   port="$((10#$port))"
+  ufw_port_apply "$act" "$port"
+}
+
+ufw_port_apply() { # $1=1 放行 / 2 关闭  $2=端口（已校验）
+  local port="$2" act="$1"
   if [ "$act" -eq 2 ]; then
     case " $(current_ssh_ports) " in
       *" $port "*)
@@ -1854,8 +1885,10 @@ ufw_port_helper() { # $1=1 放行 / 2 关闭
   return 0
 }
 
-ufw_menu() {
-  local line="" rc=0
+# 只询问不执行 → UFW_CHOICE：install / allow:端口 / close:端口 / 空
+ufw_ask_choice() {
+  local line="" port=""
+  UFW_CHOICE=""
   printf '\n  %s防火墙%s　当前：%s\n' "${C_BLD}" "${C_RST}" "$(ufw_state)"
   printf '   %s1)%s 安装并启用\n' "${C_GRN}" "${C_RST}"
   printf '   %s2)%s 放行某个端口\n' "${C_GRN}" "${C_RST}"
@@ -1865,13 +1898,34 @@ ufw_menu() {
     if ! read_line "请选择（回车=1）"; then return 0; fi
     line="$(trim "$(menu_clean_input "$REPLY")")"
     case "$line" in
-      ''|1) install_ufw || rc=1; return "$rc" ;;
-      2) ufw_port_helper 1 || rc=1; return "$rc" ;;
-      3) ufw_port_helper 2 || rc=1; return "$rc" ;;
+      ''|1) UFW_CHOICE="install"; return 0 ;;
+      2|3)
+        if ! ask_value "请输入端口号" ""; then return 0; fi
+        port="$(trim "$REPLY")"
+        if ! valid_port "$port"; then warn "端口不合法（应为 1-65535 的数字）：$port"; continue; fi
+        port="$((10#$port))"
+        if [ "$line" = "2" ]; then UFW_CHOICE="allow:${port}"; else UFW_CHOICE="close:${port}"; fi
+        return 0 ;;
       0|q|Q) return 0 ;;
       *) warn "请输入 0-3" ;;
     esac
   done
+}
+
+# 执行询问得到的选择
+ufw_run_choice() {
+  local rc=0
+  case "${1:-}" in
+    install) install_ufw || rc=1 ;;
+    allow:*) ufw_port_apply 1 "${1#allow:}" || rc=1 ;;
+    close:*) ufw_port_apply 2 "${1#close:}" || rc=1 ;;
+  esac
+  return "$rc"
+}
+
+ufw_menu() {
+  ufw_ask_choice
+  ufw_run_choice "$UFW_CHOICE"
 }
 
 # 安装 / 卸载 小菜单：回显 i（安装）u（卸载）空（跳过）
@@ -2028,11 +2082,27 @@ step_extras() {
     # 一次选 2 项以上（含 a 全选）：直接按选择批量安装，不逐项询问
     local batch=0
     if [ "${#PLAN_TOOLS[@]}" -ge 2 ] || [ "$ASSUME_YES" -eq 1 ]; then batch=1; fi
-    # 批量模式：先把"要做什么"列成清单，确认一次，然后统一执行
+    # 批量模式（选 2 项以上 / a）：先把每项要做什么都问完，再统一执行
+    local -a PLAN_ACTS=()
     if [ "$batch" -eq 1 ] && [ "$ASSUME_YES" -eq 0 ]; then
-      printf '\n%s\n' "  ${C_BLD}将要执行：${C_RST}"
       for i in "${PLAN_TOOLS[@]}"; do
-        printf '   - %s：%s%s%s\n' "${g_title[$i]}" "${C_DIM}" "$(tool_plan_line "$i")" "${C_RST}"
+        pkgs="${g_pkgs[$i]}"
+        title="${g_title[$i]}"
+        act=""
+        case "$pkgs" in
+          timezone) act="tz" ;;
+          fail2ban) fail2ban_menu; act="$TOOL_ACT" ;;
+          swap) tool_pick_action "虚拟内存　当前：$(swap_state)" "创建并启用" "关闭并删除"; act="$TOOL_ACT" ;;
+          bbr) tool_pick_action "BBR 加速　当前：$(bbr_state)" "开启" "关闭"; act="$TOOL_ACT" ;;
+          ufw) ufw_ask_choice; act="$UFW_CHOICE" ;;
+          *) tool_pick_action "${title}" "安装" "卸载"; act="$TOOL_ACT" ;;
+        esac
+        PLAN_ACTS+=("$act")
+      done
+      # 汇总一次，确认后统一执行
+      printf '\n%s\n' "  ${C_BLD}将要执行：${C_RST}"
+      for i in "${!PLAN_TOOLS[@]}"; do
+        printf '   - %s：%s%s%s\n' "${g_title[${PLAN_TOOLS[$i]}]}" "${C_DIM}" "$(plan_line_text "${PLAN_TOOLS[$i]}" "${PLAN_ACTS[$i]}")" "${C_RST}"
       done
       printf '\n'
       if ! ask_yn "确认执行以上操作？" y; then
@@ -2041,33 +2111,38 @@ step_extras() {
       fi
       printf '\n'
     fi
-
-    for i in "${PLAN_TOOLS[@]}"; do
+    # 执行阶段：按收集到的选择逐项执行（不再询问）
+    for i in "${!PLAN_TOOLS[@]}"; do
+      i="${PLAN_TOOLS[$i]}"
       pkgs="${g_pkgs[$i]}"
-      # 批量模式：汇总里标了"跳过"的（已装 / 已启用 / 时区）就不再重复执行
-      if [ "$batch" -eq 1 ]; then
-        case "$(tool_plan_line "$i")" in
-          *跳过*) info "已是最新，跳过：${g_title[$i]}"; continue ;;
-        esac
-      fi
       title="${g_title[$i]}"
       act=""
+      if [ "${#PLAN_ACTS[@]}" -gt 0 ]; then
+        act="${PLAN_ACTS[0]}"
+        PLAN_ACTS=("${PLAN_ACTS[@]:1}")
+      elif [ "$batch" -eq 1 ] || [ "$ASSUME_YES" -eq 1 ]; then
+        act="i"
+      else
+        # 单选：在这一项上当场询问（和原来一致）
+        case "$pkgs" in
+          timezone) act="tz" ;;
+          fail2ban) fail2ban_menu; act="$TOOL_ACT" ;;
+          swap) tool_pick_action "虚拟内存　当前：$(swap_state)" "创建并启用" "关闭并删除"; act="$TOOL_ACT" ;;
+          bbr) tool_pick_action "BBR 加速　当前：$(bbr_state)" "开启" "关闭"; act="$TOOL_ACT" ;;
+          ufw) ufw_ask_choice; act="$UFW_CHOICE" ;;
+          *) tool_pick_action "${title}" "安装" "卸载"; act="$TOOL_ACT" ;;
+        esac
+      fi
       case "$pkgs" in
         timezone)
-          # 批量模式（选 2 项以上 / a）没法替用户挑时区，跳过并说明
-          if [ "$batch" -eq 1 ]; then
-            info "批量模式跳过「设置时区」（需要单独选择）"
+          if [ "$batch" -eq 1 ] || [ "$ASSUME_YES" -eq 1 ]; then
+            info "跳过（时区需单独设置）"
             continue
           fi
           set_timezone || rcp=1
           continue ;;
         fail2ban)
-          if [ "$batch" -eq 1 ]; then
-            step_fail2ban || rcp=1
-            continue
-          fi
-          fail2ban_menu
-          case "$TOOL_ACT" in
+          case "$act" in
             install) step_fail2ban || rcp=1 ;;
             enable) fail2ban_enable || rcp=1 ;;
             stop) fail2ban_disable || rcp=1 ;;
@@ -2076,44 +2151,23 @@ step_extras() {
           esac
           continue ;;
         swap)
-          if [ "$batch" -eq 1 ]; then
-            setup_swap || rcp=1
-            continue
-          fi
-          tool_pick_action "虚拟内存　当前：$(swap_state)" "创建并启用" "关闭并删除"
-          case "$TOOL_ACT" in
+          case "$act" in
             i) setup_swap || rcp=1 ;;
             u) swap_disable || rcp=1 ;;
             *) info "已跳过：${title}" ;;
           esac
           continue ;;
         ufw)
-          if [ "$batch" -eq 1 ]; then
-            install_ufw || rcp=1
-          else
-            ufw_menu || rcp=1
-          fi
+          ufw_run_choice "$act" || rcp=1
           continue ;;
         bbr)
-          if [ "$batch" -eq 1 ]; then
-            enable_bbr || rcp=1
-            continue
-          fi
-          tool_pick_action "BBR 加速　当前：$(bbr_state)" "开启" "关闭"
-          case "$TOOL_ACT" in
+          case "$act" in
             i) enable_bbr || rcp=1 ;;
             u) bbr_disable || rcp=1 ;;
             *) info "已跳过：${title}" ;;
           esac
           continue ;;
       esac
-      # 普通软件包：安装 或 卸载
-      if [ "$batch" -eq 1 ]; then
-        act="i"
-      else
-        tool_pick_action "${title}" "安装" "卸载"
-        act="$TOOL_ACT"
-      fi
       case "$act" in
         i) tool_pkgs_install "$title" "$pkgs" || rcp=1 ;;
         u) tool_pkgs_remove "$title" "$pkgs" || rcp=1 ;;
