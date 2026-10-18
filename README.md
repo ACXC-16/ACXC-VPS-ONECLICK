@@ -49,4 +49,4 @@ curl -fsSL https://github.com/ACXC-16/ACXC-VPS-ONECLICK/releases/latest/download
 - 回滚 SSH 配置：`cp -a /root/acxc-vps-backup/<时间戳>-ssh/. /etc/ssh/ && systemctl restart ssh`
 - 日志：`/var/log/acxc-vps.log`（菜单 `5) 查看运行日志`），卸载里可一键清掉。
 
-仅支持 Ubuntu / Debian（含衍生版），其它系统不支持。
+仅支持 Ubuntu / Debian（含衍生版），其它系统未测试。
