@@ -177,7 +177,17 @@ prepare_log() {
 }
 
 init_log() {
-  _log_raw START "===== ${SCRIPT_NAME} v${SCRIPT_VERSION} 启动（参数：$*）====="
+  # 参数脱敏：--password 的值不能写进日志
+  local args="" a="" masked=0
+  for a in "$@"; do
+    if [ "$masked" -eq 1 ]; then args="${args} ***"; masked=0; continue; fi
+    case "$a" in
+      --password) args="${args} --password"; masked=1 ;;
+      --password=*) args="${args} --password=***" ;;
+      *) args="${args} ${a}" ;;
+    esac
+  done
+  _log_raw START "===== ${SCRIPT_NAME} v${SCRIPT_VERSION} 启动（参数：${args# }）====="
 }
 
 # ============================== 交互输入 ====================================
@@ -639,7 +649,10 @@ ssh_config_ok() { # [$1=必须生效的端口]
     return 0
   fi
   if [ -n "$want" ]; then
-    printf '%s\n' "$eff" | awk '/^port /{print $2}' | grep -qx "$want" || return 1
+    case " $(printf '%s\n' "$eff" | awk '/^port /{printf "%s ", $2}') " in
+      *" $want "*) ;;
+      *) return 1 ;;
+    esac
   fi
   return 0
 }
@@ -655,11 +668,28 @@ ssh_restore_backup() {
   if [ -d "${bak}/sshd_config.d" ]; then
     # 先把备份完整还原到旁边的临时目录，成功后再整体替换：
     # 万一拷贝中途失败（磁盘满等），原来的 drop-in 目录还在，不会把 SSH 配置弄丢。
-    local newd="/etc/ssh/sshd_config.d.restore.$$"
+    local newd="/etc/ssh/sshd_config.d.restore.$$" oldd="/etc/ssh/sshd_config.d.old.$$"
     rm -rf "$newd"
     if cp -a "${bak}/sshd_config.d" "$newd"; then
-      rm -rf /etc/ssh/sshd_config.d
-      mv "$newd" /etc/ssh/sshd_config.d || { warn "替换 drop-in 目录失败，备份在 $newd"; return 1; }
+      # 先把现有目录改名保留（不删除），替换失败就改回来
+      if mv /etc/ssh/sshd_config.d "$oldd" 2>/dev/null; then
+        if ! mv "$newd" /etc/ssh/sshd_config.d 2>/dev/null; then
+          mv "$oldd" /etc/ssh/sshd_config.d 2>/dev/null || true
+          rm -rf "$newd"
+          warn "替换 drop-in 目录失败，已恢复原目录，请手动检查 /etc/ssh/"
+          return 1
+        fi
+        info "原 drop-in 目录已保留在 ${oldd}（确认无误后可删除）"
+      else
+        # 改不了名（权限/占用）：退回到逐个文件覆盖，不删除整个目录
+        if cp -a "${bak}/sshd_config.d/." /etc/ssh/sshd_config.d/ 2>/dev/null; then
+          rm -rf "$newd"
+        else
+          rm -rf "$newd"
+          warn "还原 drop-in 目录失败，当前配置未改动，请手动检查 /etc/ssh/"
+          return 1
+        fi
+      fi
     else
       rm -rf "$newd"
       warn "还原 drop-in 目录失败（磁盘空间？），当前配置未改动，请手动检查 /etc/ssh/"
@@ -838,6 +868,13 @@ ssh_ask_port() {
   SSH_OLD_PORTS="$old_ports"
   info "当前生效的 SSH 端口：${old_ports:-未知}"
 
+    # 无人值守且没明确给 --port：绝不擅自改 SSH 端口（改了可能连不上）
+    if [ "$ASSUME_YES" -eq 1 ] && [ -z "$OPT_PORT" ]; then
+      info "无人值守模式：未指定 --port，SSH 端口保持不变。"
+      SSH_NEW_PORT=""
+      return 0
+    fi
+
   ssherr="$(sshd_test 2>&1)" || {
     warn "当前 SSH 配置本身就有语法问题："
     printf '%s\n' "$ssherr" | sed 's/^/    /'
@@ -924,7 +961,7 @@ ssh_apply_port() {
     fi
     if ! ask_yn "确认现在执行？" y; then
       info "已取消，SSH 端口没有任何改动。"
-      return 0
+      return 2
     fi
     printf '\n'
   fi
@@ -934,8 +971,10 @@ ssh_apply_port() {
   if have ufw && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
     if run ufw allow "${new_port}/tcp" >/dev/null 2>&1; then
       ok "ufw 已放行 ${new_port}/tcp"
-    else
-      warn "ufw 放行失败，请手动执行：ufw allow ${new_port}/tcp"
+    elif [ "$DRY_RUN" -eq 0 ]; then
+      err "ufw 放行 ${new_port}/tcp 失败，为避免改完后被关在门外，已中止，SSH 配置未改动。"
+      info "手动放行后重试：ufw allow ${new_port}/tcp"
+      return 1
     fi
   elif have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
     if run firewall-cmd --permanent --add-port="${new_port}/tcp" >/dev/null 2>&1 && run firewall-cmd --reload >/dev/null 2>&1; then
@@ -954,10 +993,22 @@ ssh_apply_port() {
   stamp="$(date '+%Y%m%d-%H%M%S')"
   bak="/root/acxc-vps-backup/${stamp}-ssh"
   LAST_SSH_BACKUP="$bak"
-  run mkdir -p "$bak"
-  run cp -a /etc/ssh/sshd_config "${bak}/sshd_config"
-  if [ -d /etc/ssh/sshd_config.d ]; then
-    run cp -a /etc/ssh/sshd_config.d "${bak}/sshd_config.d"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    if ! mkdir -p "$bak" 2>/dev/null || ! cp -a /etc/ssh/sshd_config "${bak}/sshd_config" 2>/dev/null; then
+      err "备份 SSH 配置失败（磁盘满或 /root 不可写），已中止，配置未改动。"
+      LAST_SSH_BACKUP=""
+      return 1
+    fi
+    if [ -d /etc/ssh/sshd_config.d ]; then
+      cp -a /etc/ssh/sshd_config.d "${bak}/sshd_config.d" 2>/dev/null || {
+        err "备份 drop-in 目录失败，已中止，配置未改动。"
+        LAST_SSH_BACKUP=""
+        return 1
+      }
+    fi
+    _log_raw CMD "备份 SSH 配置到 $bak"
+  else
+    printf '%s\n' "${C_DIM}  [dry-run] 将备份 SSH 配置到 ${bak}${C_RST}"
   fi
   ok "已备份 SSH 配置到 $bak"
 
@@ -975,6 +1026,20 @@ ssh_apply_port() {
     err "写入 SSH 配置失败，已回滚"
     ssh_restore_backup
     return 1
+  fi
+
+  # fail2ban 若在用，jail 里记的端口也要跟着换，否则保护的是旧端口
+  if have fail2ban-client && [ -f "$FAIL2BAN_CONF" ]; then
+    local f2bports="" f2bline=""
+    f2bports="$(trim "$SSH_M_PORTS" | tr -s ' ')"
+    f2bline="${f2bports// /,}"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf '%s\n' "${C_DIM}  [dry-run] 将把 fail2ban jail 的 port 改为 ${f2bline} 并重启${C_RST}"
+    else
+      sed -i -E "s|^port[[:space:]]*=.*|port    = ${f2bline}|" "$FAIL2BAN_CONF" 2>/dev/null || true
+      systemctl restart fail2ban >/dev/null 2>&1 || true
+      info "已同步 fail2ban 的端口：${f2bports}"
+    fi
   fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -1546,7 +1611,14 @@ set_timezone() {
   else
     warn "timedatectl 不可用，改用直接写文件的方式"
     run ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || rc=1
-    run sh -c "printf '%s\\n' '$tz' > /etc/timezone" || true
+    # 不用 sh -c 拼字符串，避免任何注入可能
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf '%s\n' "${C_DIM}  [dry-run] 将把 ${tz} 写入 /etc/timezone${C_RST}"
+      _log_raw CMD "写 /etc/timezone: ${tz}"
+    else
+      printf '%s\n' "$tz" > /etc/timezone 2>/dev/null || true
+      _log_raw CMD "写 /etc/timezone: ${tz}"
+    fi
   fi
   if [ "$DRY_RUN" -eq 0 ]; then
     ok "时区已设置为 $tz（当前：$(date '+%F %T %Z')）"
@@ -1638,8 +1710,8 @@ TOOL_ITEMS=(
 # fail2ban 的 5 项小菜单：安装 / 启用 / 暂停 / 卸载 / 跳过
 fail2ban_enable() {
   info "启用 fail2ban…"
-  if ! have fail2ban-client && ! have dpkg; then
-    warn "fail2ban 还没安装，先装一遍"
+  if ! have fail2ban-client; then
+    info "fail2ban 还没安装，先安装一遍"
     step_fail2ban || return 1
   fi
   run systemctl enable fail2ban || true
@@ -2428,7 +2500,11 @@ uninstall_shortcut() {
 uninstall_log() {
   if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
     if ask_yn "删除日志文件 $LOG_FILE ？" y; then
-      run rm -f "$LOG_FILE" && { ok "已删除：$LOG_FILE"; }
+      local keep="$LOG_FILE"
+      if run rm -f "$keep"; then
+        LOG_FILE=""   # 之后不再写日志，避免刚删掉又被重建
+        printf '  %s[成功] 已删除：%s%s\n' "${C_GRN}" "$keep" "${C_RST}"
+      fi
     fi
   fi
   return 0
@@ -2496,6 +2572,10 @@ uninstall_configs() {
       if [ -f /etc/ssh/sshd_config ]; then
         run remove_managed_inline_block /etc/ssh/sshd_config || true
         if [ "$DRY_RUN" -eq 0 ]; then
+          # 删掉受管配置后 sshd 可能回到 22；ufw 开着却没放行 22 → 会把自己关在门外
+          if have ufw && case "$(ufw status 2>/dev/null)" in *"Status: active"*) true ;; *) false ;; esac; then
+            ufw allow 22/tcp >/dev/null 2>&1 && info "已在 ufw 放行 22/tcp（删除受管配置后 SSH 通常回到 22）"
+          fi
           if ssh_config_ok; then
             restart_ssh && ok "SSH 已重启，现在使用系统原本的端口"
           else
