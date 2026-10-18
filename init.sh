@@ -2872,6 +2872,28 @@ screen_margin() {
 
 
 
+# 备用屏幕：脚本界面画在"另一块屏"上，退出时终端把原内容整块还原，脚本界面一点不留。
+# 注意：这里只用 ?1049 切换，不发任何光标位置查询（那会在某些终端上漏出 ^[[13;1R 之类的乱码）；
+# 退出时把光标放到屏幕最后一行，提示符就落在底部，不会出现在屏幕中间。
+ALT_SCREEN=0
+enter_fullscreen() {
+  [ "$TTY_OK" -eq 1 ] || return 0
+  [ -n "${TERM:-}" ] || return 0
+  [ "$ALT_SCREEN" -eq 1 ] && return 0
+  printf '\033[?1049h\033[H'
+  ALT_SCREEN=1
+  return 0
+}
+
+leave_fullscreen() {
+  [ "$ALT_SCREEN" -eq 1 ] || return 0
+  ALT_SCREEN=0
+  printf '\033[?1049l'
+  printf '\033[0m'
+  printf '\033[999;1H'
+  return 0
+}
+
 refresh_screen() {
   [ "$CLEAR_SCREEN" -eq 1 ] || return 0
   if [ "$TTY_OK" -eq 1 ] && [ -n "${TERM:-}" ]; then
@@ -3380,6 +3402,10 @@ main() {
   require_root
   detect_tty
   check_tty
+  # 交互式切备用屏幕：退出时终端整块还原，脚本界面不留（无人值守保持正常屏幕）
+  if [ -z "$ONLY_LIST" ] && [ -z "$SKIP_LIST" ] && [ "$ASSUME_YES" -eq 0 ]; then
+    enter_fullscreen
+  fi
   banner
   check_os
   export DEBIAN_FRONTEND=noninteractive
@@ -3408,7 +3434,8 @@ main() {
   return 0
 }
 
-trap 'printf "\n"; err "已被中断（Ctrl+C）。已执行的步骤不会自动回滚。"; exit 130' INT TERM
+trap 'leave_fullscreen; printf "\n"; err "已被中断（Ctrl+C）。已执行的步骤不会自动回滚。"; exit 130' INT TERM
+trap 'leave_fullscreen' EXIT
 
 main "$@"
 exit $?
