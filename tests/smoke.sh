@@ -492,13 +492,13 @@ n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
 check "只选一项：装完回到本菜单（列表 2 次）" "2" "$n"
 
 CUR_OUT="$WORK/norepeat2b.out"
-rc="$(printf '3\n1 2\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n1 2\ny\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "工具多选退出码" "0" "$rc"
 n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
 check "选两项：装完回上级菜单（列表 1 次）" "1" "$n"
 
 CUR_OUT="$WORK/norepeat2c.out"
-rc="$(printf '3\na\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\na\ny\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 # 全选会连 BBR 一起做；本机内核不支持时该步会返回 1，这里 0/1 都算正常
 case "$rc" in 0|1) ok "工具全选（rc=$rc）" ;; *) bad "工具全选退出码异常：$rc" ;; esac
 n="$(grep -c '可安装 / 可设置的项目' "$CUR_OUT")"
@@ -643,7 +643,7 @@ fi
 check_has "提示了失联后的补救办法" "$CUR_OUT" "ufw disable"
 
 CUR_OUT="$WORK/ufw-rec.out"
-rc="$(printf '3\n\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n\ny\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "回车只装推荐项退出码" "0" "$rc"
 check_hasnt "推荐项里不含 ufw" "$CUR_OUT" "apt-get -y install ufw"
 check_hasnt "推荐项里不放行 ufw 规则" "$CUR_OUT" "ufw allow"
@@ -844,15 +844,15 @@ if [ "$n" -ge 10 ]; then ok "大图标至少出现 10 行（两次画面）"; el
 
 echo "== 49) 批量选择（a / 两项以上）不再逐项询问，直接全部安装 =="
 CUR_OUT="$WORK/batch-a.out"
-rc="$(printf '3\na\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\na\ny\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "选 a 退出码" "0" "$rc"
 n="$(grep -c '请选择（回车' "$CUR_OUT" || true)"
 check "选 a 不出现逐项小菜单" "0" "$n"
 check_has "直接装了下载与证书" "$CUR_OUT" "[信息] 安装：下载与证书"
-check_has "批量模式跳过时区并说明" "$CUR_OUT" "批量模式跳过「设置时区」"
+check_has "汇总里说明时区跳过" "$CUR_OUT" "设置时区：跳过"
 
 CUR_OUT="$WORK/batch-two.out"
-rc="$(printf '3\n1 2\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
+rc="$(printf '3\n1 2\ny\n0\n' | run_case "$CUR_OUT" "$WORK/init-fake.sh" --force --dry-run)"
 check "选两项退出码" "0" "$rc"
 n="$(grep -c '请选择（回车' "$CUR_OUT" || true)"
 check "选两项不出现逐项小菜单" "0" "$n"

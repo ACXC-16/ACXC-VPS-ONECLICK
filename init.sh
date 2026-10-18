@@ -1709,6 +1709,25 @@ tool_pkg_installed() { # $1=包名
   return 1
 }
 
+tool_plan_line() { # $1=索引 → 批量执行时该项目要做什么（汇总清单用）
+  local pkgs="${g_pkgs[$1]}" miss=0 p=""
+  case "$pkgs" in
+    fail2ban)
+      case "$(fail2ban_state)" in
+        运行中) printf '已在运行，跳过' ;;
+        *未运行*) printf '启动' ;;
+        *) printf '安装并启动' ;;
+      esac; return 0 ;;
+    swap)
+      if [ "$(swap_total_mb)" -gt 0 ]; then printf '已启用，跳过'; else printf '创建并启用'; fi; return 0 ;;
+    ufw) ufw_state | sed 's/^未安装$/安装并启用/; s/^已启用.*/已启用，跳过/; s/^已停止.*/启用/' ; return 0 ;;
+    bbr)
+      case "$(bbr_state)" in 已开启*) printf '已开启，跳过' ;; *) printf '开启' ;; esac; return 0 ;;
+    timezone) printf '跳过（时区需单独设置）'; return 0 ;;
+  esac
+  for p in $pkgs; do tool_pkg_installed "$p" || miss=1; done
+  if [ "$miss" -eq 0 ]; then printf '已装，跳过'; else printf '安装'; fi
+}
 tool_state() { # $1=索引 → 输出一句短状态（给列表用）
   local pkgs="${g_pkgs[$1]}" tz="" miss=0 p="";
   case "$pkgs" in
@@ -2009,8 +2028,28 @@ step_extras() {
     # 一次选 2 项以上（含 a 全选）：直接按选择批量安装，不逐项询问
     local batch=0
     if [ "${#PLAN_TOOLS[@]}" -ge 2 ] || [ "$ASSUME_YES" -eq 1 ]; then batch=1; fi
+    # 批量模式：先把"要做什么"列成清单，确认一次，然后统一执行
+    if [ "$batch" -eq 1 ] && [ "$ASSUME_YES" -eq 0 ]; then
+      printf '\n%s\n' "  ${C_BLD}将要执行：${C_RST}"
+      for i in "${PLAN_TOOLS[@]}"; do
+        printf '   - %s：%s%s%s\n' "${g_title[$i]}" "${C_DIM}" "$(tool_plan_line "$i")" "${C_RST}"
+      done
+      printf '\n'
+      if ! ask_yn "确认执行以上操作？" y; then
+        info "已取消，回到项目列表。"
+        continue
+      fi
+      printf '\n'
+    fi
+
     for i in "${PLAN_TOOLS[@]}"; do
       pkgs="${g_pkgs[$i]}"
+      # 批量模式：汇总里标了"跳过"的（已装 / 已启用 / 时区）就不再重复执行
+      if [ "$batch" -eq 1 ]; then
+        case "$(tool_plan_line "$i")" in
+          *跳过*) info "已是最新，跳过：${g_title[$i]}"; continue ;;
+        esac
+      fi
       title="${g_title[$i]}"
       act=""
       case "$pkgs" in
